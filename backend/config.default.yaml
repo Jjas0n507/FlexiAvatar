@@ -1,0 +1,92 @@
+# ============================================================
+# AI Agent — 默认配置文件
+# 请勿直接修改此文件，创建 config.user.yaml 覆盖需要的项
+# 敏感信息（API Key 等）通过 .env 环境变量设置
+# ============================================================
+
+app:
+  name: "AI智能助手"
+  version: "0.1.0"
+  host: "127.0.0.1"
+  port: 8765
+  log_level: "info"
+
+# ── 语音活动检测 ────────────────────────────
+vad:
+  engine: "silero"
+  sample_rate: 16000
+  frame_duration_ms: 30
+  speech_threshold: 0.5
+  speech_start_frames: 5
+  silence_end_frames: 15
+  interrupt_frames: 4
+  max_speech_duration_s: 30
+
+# ── 语音识别 ────────────────────────────────
+asr:
+  engine: "funasr"
+  language: "zh"
+  funasr:
+    model: "iic/SenseVoiceSmall"
+    device: "cpu"
+    use_itn: true
+    use_punc: true
+
+# ── 语音合成 ────────────────────────────────
+tts:
+  engine: "edge-tts"
+  edge_tts:
+    voice: "zh-CN-XiaoxiaoNeural"
+    speed: "+10%"
+    pitch: "+0Hz"
+
+# ── 大语言模型 ──────────────────────────────
+llm:
+  engine: "openai"
+  system_prompt: |
+    你是一个友好的桌面 AI 助手。你有 Live2D 形象，能与用户进行语音对话。
+    回答应当简洁、自然、口语化，像日常对话一样。每次回答控制在 100 字以内。
+    当用户询问时间、天气、需要计算或搜索时，使用可用的工具来获取准确信息。
+
+  openai:
+    model: "gpt-4o"
+    base_url: "https://api.openai.com/v1"
+    temperature: 0.7
+    max_tokens: 1024
+    api_key: "${OPENAI_API_KEY}"
+
+  ollama:
+    base_url: "http://localhost:11434"
+    model: "qwen2.5:7b"
+    temperature: 0.7
+
+  claude:
+    model: "claude-sonnet-4-6"
+    max_tokens: 1024
+    api_key: "${ANTHROPIC_API_KEY}"
+
+# ── Live2D ───────────────────────────────────
+live2d:
+  model_path: "frontend/public/live2d/hiyori/hiyori.model3.json"
+  scale: 1.0
+  auto_blink: true
+  blink_interval_min_ms: 2000
+  blink_interval_max_ms: 6000
+  idle_motion_group: "idle"
+  breathing_rate: 0.8
+
+# ── 工具系统 ────────────────────────────────
+tools:
+  user_tools_dir: "backend/tools/user_tools"
+  enabled_builtin:
+    - "get_current_time"
+    - "get_weather"
+    - "calculate"
+    - "web_search"
+  max_tool_rounds: 5
+
+# ── 对话 ─────────────────────────────────────
+conversation:
+  max_history_messages: 20
+  max_context_tokens: 4000
+  silence_timeout_s: 30

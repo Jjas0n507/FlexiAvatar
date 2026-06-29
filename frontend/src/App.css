@@ -1,0 +1,221 @@
+/* ── 全局重置 ──────────────────────────── */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", sans-serif;
+  background: transparent;
+}
+
+/* ── 主容器 ────────────────────────────── */
+.app-container {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+}
+
+/* ── Live2D 占位 ───────────────────────── */
+.live2d-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.live2d-box {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+}
+
+.live2d-emoji {
+  font-size: 64px;
+  display: block;
+  margin-bottom: 12px;
+  animation: float 3s ease-in-out infinite;
+}
+
+/* ── 控制栏 ────────────────────────────── */
+.control-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px 24px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  z-index: 200;
+}
+
+.interrupt-btn {
+  padding: 10px 20px;
+  border: 2px solid rgba(244, 67, 54, 0.5);
+  border-radius: 24px;
+  background: transparent;
+  color: #f44336;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.interrupt-btn.active {
+  background: rgba(244, 67, 54, 0.2);
+  border-color: #f44336;
+  animation: pulse-btn 1.5s infinite;
+}
+
+.interrupt-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.interrupt-btn:not(:disabled):hover {
+  background: rgba(244, 67, 54, 0.3);
+}
+
+.text-input-group {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  max-width: 500px;
+}
+
+.text-input {
+  flex: 1;
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.text-input:focus {
+  border-color: rgba(33, 150, 243, 0.6);
+}
+
+.text-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.send-btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 24px;
+  background: #2196f3;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.send-btn:hover {
+  background: #1976d2;
+}
+
+/* ── 调试面板 ──────────────────────────── */
+.debug-panel {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 260px;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(12px);
+  border-radius: 12px;
+  z-index: 300;
+  overflow: hidden;
+}
+
+.debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #ccc;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.debug-header button {
+  border: none;
+  background: transparent;
+  color: #999;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.debug-content {
+  padding: 12px;
+  color: #aaa;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.debug-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  z-index: 300;
+}
+
+.status-ok {
+  color: #4caf50;
+}
+
+.status-err {
+  color: #f44336;
+}
+
+/* ── 动画 ──────────────────────────────── */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes pulse-btn {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(244, 67, 54, 0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}

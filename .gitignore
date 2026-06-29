@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+*.egg
+
+# Conda
+.conda/
+
+# Models (large files)
+resources/models/*
+!resources/models/.gitkeep
+
+# Environment
+.env
+config.user.yaml
+
+# Node
+node_modules/
+frontend/node_modules/
+dist/
+.vite/
+
+# Electron
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# User tools (except .gitkeep)
+backend/tools/user_tools/*
+!backend/tools/user_tools/.gitkeep

@@ -1,0 +1,74 @@
+/**
+ * 全局基础样式
+ *
+ * 设计理念: 深色主题，透明背景支持 Live2D，最小化样式侵入。
+ */
+
+:root {
+  --font-sans: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Fira Code", ui-monospace, monospace;
+  --color-bg: #1a1a2e;
+  --color-surface: rgba(255, 255, 255, 0.08);
+  --color-text: #e0e0e0;
+  --color-text-dim: #888;
+  --color-primary: #2196f3;
+  --color-danger: #f44336;
+  --color-success: #4caf50;
+  --color-warning: #ff9800;
+
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-bg);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 清除默认样式 */
+button {
+  font-family: var(--font-sans);
+}
+
+input {
+  font-family: var(--font-sans);
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* 选中颜色 */
+::selection {
+  background: rgba(33, 150, 243, 0.3);
+  color: #fff;
+}
