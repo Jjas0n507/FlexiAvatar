@@ -24,6 +24,7 @@ dist/
 
 # Electron
 out/
+frontend/dist-electron/
 
 # IDE
 .vscode/
@@ -42,3 +43,8 @@ logs/
 # User tools (except .gitkeep)
 backend/tools/user_tools/*
 !backend/tools/user_tools/.gitkeep
+resources/models/
+
+# Test outputs
+resources/test_audio/tts_output_*
+resources/test_audio/*.mp3
