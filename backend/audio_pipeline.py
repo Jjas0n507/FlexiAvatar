@@ -1,0 +1,251 @@
+"""
+语音流水线编排器。
+
+将 VAD → ASR → (LLM/Echo) → TTS 串联为完整的语音对话链路。
+支持打断机制和 WebSocket 音频流。
+
+设计:
+- AudioPipeline 管理单个对话会话的完整生命周期
+- 通过回调将结果推送到 WebSocket 客户端
+- 可被 SessionManager 的 interrupt 事件取消
+"""
+
+import asyncio
+import logging
+import time
+from typing import Callable, Awaitable
+
+import numpy as np
+
+from backend.session.manager import SessionManager, SessionState
+from backend.vad.silero_adapter import SileroVAD
+from backend.asr.whisper_adapter import WhisperASR
+from backend.tts.edge_tts_adapter import EdgeTTSAdapter
+from backend.tts.base import TTSResult
+from backend.live2d.motion_controller import MotionController
+
+logger = logging.getLogger("pipeline")
+
+
+class AudioPipeline:
+    """
+    语音对话流水线。
+
+    用法:
+        pipeline = AudioPipeline(session_manager, on_tts_audio, on_live2d, on_asr_text)
+        asyncio.create_task(pipeline.run())
+    """
+
+    def __init__(
+        self,
+        session_manager: SessionManager,
+        on_tts_audio: Callable[[TTSResult], Awaitable[None]] | None = None,
+        on_live2d_control: Callable[[dict], Awaitable[None]] | None = None,
+        on_asr_result: Callable[[str, bool], Awaitable[None]] | None = None,
+        on_llm_stream: Callable[[str, bool, bool], Awaitable[None]] | None = None,
+    ):
+        self._session = session_manager
+        self._on_tts_audio = on_tts_audio
+        self._on_live2d = on_live2d_control
+        self._on_asr_result = on_asr_result
+        self._on_llm = on_llm_stream
+
+        # 引擎 (懒初始化)
+        self._vad: SileroVAD | None = None
+        self._asr: WhisperASR | None = None
+        self._tts: EdgeTTSAdapter | None = None
+        self._motion: MotionController | None = None
+
+        # 音频缓冲
+        self._audio_buffer: list[np.ndarray] = []
+        self._input_queue: asyncio.Queue = asyncio.Queue()
+
+    # ── 初始化 ──────────────────────────────────
+
+    async def _init_engines(self):
+        """懒初始化所有引擎"""
+        if self._vad is None:
+            self._vad = SileroVAD(threshold=0.5)
+            self._asr = WhisperASR(model_size="medium", language="zh",
+                                   device="cpu", compute_type="int8")
+            self._tts = EdgeTTSAdapter(voice="zh-CN-XiaoxiaoNeural", speed="+10%")
+            self._motion = MotionController()
+
+            await self._asr.warmup()
+            logger.info("All engines initialized")
+
+    # ── 音频输入 ────────────────────────────────
+
+    def feed_audio(self, audio_chunk: np.ndarray):
+        """接收前端传来的音频帧，放入处理队列"""
+        self._input_queue.put_nowait(audio_chunk)
+
+    # ── 主循环 ──────────────────────────────────
+
+    async def run(self):
+        """主流水线循环"""
+        await self._init_engines()
+
+        logger.info("Audio pipeline started")
+        cancel = self._session.cancel_event
+
+        while not cancel.is_set():
+            try:
+                # 等待音频帧 (10ms 超时以便检查 cancel)
+                try:
+                    audio_frame = await asyncio.wait_for(
+                        self._input_queue.get(), timeout=0.1
+                    )
+                except asyncio.TimeoutError:
+                    continue
+
+                state = self._session.state
+
+                if state == SessionState.IDLE:
+                    # 空闲时做低频率 VAD 检测
+                    if self._vad.should_interrupt(audio_frame):
+                        await self._session.transition(
+                            "vad_speech_start", reason="vad_detected"
+                        )
+                        self._audio_buffer = [audio_frame]
+
+                elif state == SessionState.LISTENING:
+                    self._audio_buffer.append(audio_frame.copy())
+                    result = self._vad.process_frame(audio_frame)
+
+                    if result.event.value == "speech_end":
+                        await self._on_asr_result("...", False) if self._on_asr_result else None
+                        await self._session.transition(
+                            "vad_speech_end", reason="vad_silence"
+                        )
+                        # 清空残留音频帧，防止处理时误触发打断
+                        self._flush_queue()
+                        # 在后台处理 ASR + 回复
+                        asyncio.create_task(self._process_speech())
+
+                    elif result.event.value == "vad_timeout":
+                        await self._session.transition(
+                            "vad_timeout", reason="no_speech"
+                        )
+
+                elif state == SessionState.SPEAKING:
+                    # 检测打断
+                    if self._vad.should_interrupt(audio_frame):
+                        logger.info("Interrupt detected!")
+                        await self._session.interrupt(reason="user_speech")
+                        await self._on_live2d(
+                            self._motion.get_interrupt_command()
+                        ) if self._on_live2d else None
+
+                elif state == SessionState.INTERRUPTED:
+                    # 等待清理完成
+                    await asyncio.sleep(0.3)
+                    await self._session.transition("interrupt_handled")
+                    self._audio_buffer = [audio_frame.copy()]
+
+            except Exception as e:
+                logger.error(f"Pipeline error: {e}", exc_info=True)
+
+        logger.info("Audio pipeline stopped")
+
+    # ── 语音处理 ────────────────────────────────
+
+    async def _process_speech(self):
+        """处理收集到的语音段: ASR → LLM(echo) → TTS"""
+        cancel = self._session.cancel_event
+
+        try:
+            # 1. ASR
+            if not self._audio_buffer:
+                return
+
+            audio = np.concatenate(self._audio_buffer)
+            self._audio_buffer.clear()
+
+            logger.info(f"ASR processing {len(audio)} samples ({len(audio)/16000:.1f}s)")
+            asr_result = await self._asr.transcribe(audio)
+
+            if cancel.is_set():
+                return
+
+            text = asr_result.text.strip()
+            logger.info(f"ASR result: {text}")
+
+            await self._on_asr_result(text, True) if self._on_asr_result else None
+
+            if not text:
+                await self._session.transition("speaking_done", reason="empty_asr")
+                return
+
+            # 2. LLM (阶段 3 替换为真正的 LLM)
+            # 当前使用 echo
+            response_text = f"你说：{text}"
+
+            if self._on_llm:
+                await self._on_llm(response_text, True, True)
+
+            if cancel.is_set():
+                return
+
+            # 3. TTS
+            logger.info(f"TTS synthesizing: {response_text[:50]}...")
+            await self._session.transition("processing_done", reason="response_ready")
+
+            tts_result = await self._tts.synthesize(response_text)
+
+            if cancel.is_set():
+                return
+
+            # 4. 发送音频 + Live2D 控制
+            if self._on_tts_audio:
+                await self._on_tts_audio(tts_result)
+
+            if self._on_live2d and tts_result.phonemes:
+                # 口型同步
+                lip_msg = self._motion.build_lip_sync_message(
+                    tts_result.phonemes, time.time()
+                )
+                await self._on_live2d(lip_msg)
+
+                # 情绪
+                expr = self._motion.get_expression_for_text(response_text)
+                expr_msg = self._motion.build_expression_message(expr)
+                await self._on_live2d(expr_msg)
+
+            # 等待音频播完
+            await asyncio.sleep(tts_result.duration_ms / 1000.0)
+
+            if cancel.is_set():
+                return
+
+            await self._session.transition("speaking_done", reason="tts_finished")
+
+        except asyncio.CancelledError:
+            logger.info("Speech processing cancelled (interrupted)")
+        except Exception as e:
+            logger.error(f"Speech processing error: {e}", exc_info=True)
+            try:
+                await self._session.reset()
+            except Exception:
+                pass
+
+    def _flush_queue(self):
+        """清空输入队列中的残留音频帧"""
+        drained = 0
+        while not self._input_queue.empty():
+            try:
+                self._input_queue.get_nowait()
+                drained += 1
+            except asyncio.QueueEmpty:
+                break
+        if drained:
+            logger.debug(f"Flushed {drained} residual audio frames")
+
+    # ── 清理 ──────────────────────────────────
+
+    async def shutdown(self):
+        """关闭流水线"""
+        self._audio_buffer.clear()
+        while not self._input_queue.empty():
+            self._input_queue.get_nowait()
+        logger.info("Pipeline shutdown complete")

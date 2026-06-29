@@ -22,6 +22,8 @@ from backend.config import config
 from backend.session.manager import SessionManager, SessionState
 from backend.tools.registry import ToolRegistry
 from backend.live2d.motion_controller import MotionController
+from backend.audio_pipeline import AudioPipeline
+from backend.tts.base import TTSResult
 
 # ── 日志 ─────────────────────────────────────────
 
@@ -100,44 +102,129 @@ async def broadcast_state(state: SessionState, reason: str = "") -> None:
 
 # ── 消息处理器 ──────────────────────────────────
 
+# 每个客户端的音频流水线
+client_pipelines: dict[str, AudioPipeline] = {}
+
+
+async def _get_or_create_pipeline(client_id: str, websocket: WebSocket) -> AudioPipeline:
+    """获取或创建客户端的音频流水线"""
+    if client_id not in client_pipelines:
+        pipeline = AudioPipeline(
+            session_manager=session_manager,
+            on_tts_audio=lambda result: _send_tts(client_id, result),
+            on_live2d_control=lambda msg: send_to(client_id, {
+                "type": "live2d.control",
+                "id": str(uuid.uuid4()),
+                "timestamp": int(time.time() * 1000),
+                "payload": msg,
+            }),
+            on_asr_result=lambda text, is_final: send_to(client_id, {
+                "type": "asr.result",
+                "id": str(uuid.uuid4()),
+                "timestamp": int(time.time() * 1000),
+                "payload": {"text": text, "isFinal": is_final, "confidence": 0.9},
+            }),
+            on_llm_stream=lambda text, first, last: send_to(client_id, {
+                "type": "llm.stream",
+                "id": str(uuid.uuid4()),
+                "timestamp": int(time.time() * 1000),
+                "payload": {"text": text, "isFirstChunk": first, "isLastChunk": last},
+            }),
+        )
+        client_pipelines[client_id] = pipeline
+        asyncio.create_task(pipeline.run())
+    return client_pipelines[client_id]
+
+
+async def _send_tts(client_id: str, result: TTSResult) -> None:
+    """发送 TTS 音频到前端"""
+    ws = connected_clients.get(client_id)
+    if not ws:
+        return
+    try:
+        import base64
+        audio_b64 = base64.b64encode(result.audio_bytes).decode("ascii")
+        await ws.send_json({
+            "type": "tts.audio",
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "audio": audio_b64,
+                "format": "wav",
+                "sampleRate": result.sample_rate,
+                "durationMs": result.duration_ms,
+                "phonemes": [
+                    {"phoneme": p.phoneme, "startMs": p.start_ms, "endMs": p.end_ms}
+                    for p in result.phonemes
+                ],
+            },
+        })
+    except Exception as e:
+        logger.error(f"Failed to send TTS audio: {e}")
+
+
 async def handle_interrupt(client_id: str, payload: dict) -> None:
     """处理用户打断"""
-    logger.info(f"收到打断信号 from {client_id}")
+    logger.info(f"打断信号 from {client_id}")
     await session_manager.interrupt(reason="user_interrupt")
-    # 等待状态转换完成
-    await asyncio.sleep(0.05)
+
+
+async def handle_audio_chunk(client_id: str, payload: dict, websocket: WebSocket) -> None:
+    """处理音频数据块"""
+    pipeline = await _get_or_create_pipeline(client_id, websocket)
+    import base64
+    import numpy as np
+
+    audio_b64 = payload.get("data", "")
+    if audio_b64:
+        audio_bytes = base64.b64decode(audio_b64)
+        # 16-bit PCM → float32
+        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        pipeline.feed_audio(audio_np)
 
 
 async def handle_chat_text(client_id: str, payload: dict) -> None:
-    """处理文本聊天消息（调试/文字输入模式）"""
+    """处理文本聊天消息（使用流水线）"""
     text = payload.get("text", "")
     if not text:
         return
 
-    logger.info(f"收到文字消息: {text[:50]}...")
+    logger.info(f"文字消息: {text[:50]}...")
 
-    # 模拟状态流转
-    await session_manager.transition("vad_speech_start", reason="text_input")
-    await session_manager.transition("vad_speech_end", reason="text_input")
+    # 使用流水线的 TTS 和 LLM 回调
+    pipeline = client_pipelines.get(client_id)
+    if pipeline and pipeline._on_llm:
+        # 模拟语音流水线
+        await session_manager.transition("vad_speech_start", reason="text_input")
+        await session_manager.transition("vad_speech_end", reason="text_input")
 
-    # 回显（阶段 1 用 echo，阶段 3 替换为 LLM）
-    response_text = f"[Echo] 收到: {text}"
+        response_text = f"[Echo] {text}"
+        await pipeline._on_llm(response_text, True, True)
 
-    await session_manager.transition("processing_done", reason="echo")
+        await session_manager.transition("processing_done", reason="echo")
 
-    # 发送回复
-    await send_to(client_id, {
-        "type": "llm.stream",
-        "id": str(uuid.uuid4()),
-        "timestamp": int(time.time() * 1000),
-        "payload": {
-            "text": response_text,
-            "isFirstChunk": True,
-            "isLastChunk": True,
-        },
-    })
+        # 合成 TTS
+        if pipeline._tts:
+            tts_result = await pipeline._tts.synthesize(response_text)
+            if pipeline._on_tts_audio:
+                await pipeline._on_tts_audio(tts_result)
+            if pipeline._on_live2d and tts_result.phonemes:
+                from backend.tts.base import TTSResult
+                motion_ctrl = MotionController()
+                lip_msg = motion_ctrl.build_lip_sync_message(
+                    tts_result.phonemes, time.time()
+                )
+                await pipeline._on_live2d(lip_msg)
 
-    await session_manager.transition("speaking_done", reason="echo_complete")
+        await session_manager.transition("speaking_done", reason="echo_complete")
+    else:
+        # Fallback: 直接发文本回复
+        await send_to(client_id, {
+            "type": "llm.stream",
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "payload": {"text": f"[Echo] {text}", "isFirstChunk": True, "isLastChunk": True},
+        })
 
 
 async def handle_ping(client_id: str, payload: dict) -> None:
@@ -154,6 +241,7 @@ async def handle_ping(client_id: str, payload: dict) -> None:
 MESSAGE_HANDLERS = {
     "user.interrupt": handle_interrupt,
     "chat.text": handle_chat_text,
+    "audio.chunk": handle_audio_chunk,
     "ping": handle_ping,
 }
 
@@ -262,7 +350,11 @@ async def websocket_endpoint(websocket: WebSocket):
             handler = MESSAGE_HANDLERS.get(msg_type)
             if handler:
                 try:
-                    await handler(client_id, payload)
+                    # audio.chunk 需要传递 websocket 对象
+                    if msg_type == "audio.chunk":
+                        await handler(client_id, payload, websocket)
+                    else:
+                        await handler(client_id, payload)
                 except Exception as e:
                     logger.error(f"处理消息 {msg_type} 失败: {e}", exc_info=True)
                     await websocket.send_json({
