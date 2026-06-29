@@ -42,3 +42,4 @@ logs/
 # User tools (except .gitkeep)
 backend/tools/user_tools/*
 !backend/tools/user_tools/.gitkeep
+resources/models/
