@@ -220,16 +220,19 @@ async def handle_chat_text(client_id: str, payload: dict) -> None:
         if response_text:
             pipeline._history.append(Message(role="assistant", content=response_text))
 
-        # 合成 TTS
+        # 合成 TTS（流式）
         if pipeline._tts and response_text:
-            tts_result = await pipeline._tts.synthesize(response_text)
-            if pipeline._on_tts_audio:
-                await pipeline._on_tts_audio(tts_result)
-            if pipeline._on_live2d and tts_result.phonemes:
-                lip_msg = pipeline._motion.build_lip_sync_message(
-                    tts_result.phonemes, time.time()
-                )
-                await pipeline._on_live2d(lip_msg)
+            total_dur = 0.0
+            async for tts_result in pipeline._tts.stream_synthesize(response_text):
+                if pipeline._on_tts_audio:
+                    await pipeline._on_tts_audio(tts_result)
+                if pipeline._on_live2d and tts_result.phonemes:
+                    lip_msg = pipeline._motion.build_lip_sync_message(
+                        tts_result.phonemes, time.time()
+                    )
+                    await pipeline._on_live2d(lip_msg)
+                total_dur += tts_result.duration_ms
+            await asyncio.sleep(total_dur / 1000.0)
 
         await session_manager.transition("speaking_done", reason="tts_finished")
     else:

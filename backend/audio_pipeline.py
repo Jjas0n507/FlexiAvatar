@@ -265,32 +265,35 @@ class AudioPipeline:
             if cancel.is_set():
                 return
 
-            # 3. TTS
+            # 3. TTS — 流式合成（逐句播放）
             logger.info(f"TTS synthesizing: {response_text[:50]}...")
 
-            tts_result = await self._tts.synthesize(response_text)
+            total_duration_ms = 0.0
+            async for tts_result in self._tts.stream_synthesize(response_text):
+                if cancel.is_set():
+                    return
 
-            if cancel.is_set():
-                return
+                # 发送音频块
+                if self._on_tts_audio:
+                    await self._on_tts_audio(tts_result)
 
-            # 4. 发送音频 + Live2D 控制
-            if self._on_tts_audio:
-                await self._on_tts_audio(tts_result)
-
-            if self._on_live2d and tts_result.phonemes:
                 # 口型同步
-                lip_msg = self._motion.build_lip_sync_message(
-                    tts_result.phonemes, time.time()
-                )
-                await self._on_live2d(lip_msg)
+                if self._on_live2d and tts_result.phonemes:
+                    lip_msg = self._motion.build_lip_sync_message(
+                        tts_result.phonemes, time.time()
+                    )
+                    await self._on_live2d(lip_msg)
 
-                # 情绪
+                total_duration_ms += tts_result.duration_ms
+
+            # 情绪（在整个回复完成后发送一次）
+            if self._on_live2d:
                 expr = self._motion.get_expression_for_text(response_text)
                 expr_msg = self._motion.build_expression_message(expr)
                 await self._on_live2d(expr_msg)
 
-            # 等待音频播完
-            await asyncio.sleep(tts_result.duration_ms / 1000.0)
+            # 等待所有音频播完
+            await asyncio.sleep(total_duration_ms / 1000.0)
 
             if cancel.is_set():
                 return
