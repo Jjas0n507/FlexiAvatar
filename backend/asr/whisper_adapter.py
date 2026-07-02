@@ -5,6 +5,14 @@ Faster-Whisper ASR 适配器。
 支持多语言，中文识别。
 """
 
+import os
+import sys
+
+# Windows 上 MKL 与 LLVM OpenMP 冲突修复 (conda 环境必需)
+if sys.platform == "win32":
+    os.environ.setdefault("MKL_THREADING_LAYER", "sequential")
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import numpy as np
 
 from backend.asr.base import BaseASR, ASRResult

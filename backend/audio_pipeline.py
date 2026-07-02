@@ -17,6 +17,7 @@ from typing import Callable, Awaitable
 
 import numpy as np
 
+from backend.config import config
 from backend.session.manager import SessionManager, SessionState
 from backend.vad.silero_adapter import SileroVAD
 from backend.asr.whisper_adapter import WhisperASR
@@ -66,8 +67,14 @@ class AudioPipeline:
         """懒初始化所有引擎"""
         if self._vad is None:
             self._vad = SileroVAD(threshold=0.5)
-            self._asr = WhisperASR(model_size="medium", language="zh",
-                                   device="cpu", compute_type="int8")
+            model_size = config.get("asr.whisper.model_size", "base")
+            device = config.get("asr.whisper.device", "cpu")
+            compute_type = config.get("asr.whisper.compute_type", "int8")
+            beam_size = config.get("asr.whisper.beam_size", 5)
+            logger.info(f"Initializing ASR: Whisper {model_size} on {device} ({compute_type})")
+            self._asr = WhisperASR(model_size=model_size, language="zh",
+                                   device=device, compute_type=compute_type,
+                                   beam_size=beam_size)
             self._tts = EdgeTTSAdapter(voice="zh-CN-XiaoxiaoNeural", speed="+10%")
             self._motion = MotionController()
 
