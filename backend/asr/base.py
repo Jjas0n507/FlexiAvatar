@@ -7,6 +7,7 @@ ASR (Automatic Speech Recognition) 抽象基类。
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import AsyncIterator
 
 
 @dataclass
@@ -38,6 +39,19 @@ class BaseASR(ABC):
             ASRResult 包含识别文本和置信度
         """
         ...
+
+    async def stream_transcribe(self, audio: "np.ndarray") -> AsyncIterator[ASRResult]:
+        """
+        流式转写语音为文本 (async generator)。
+
+        每识别出一个片段就 yield 一个 ASRResult (is_final=False)。
+        最后 yield 完整文本 (is_final=True)。
+
+        默认实现：直接调用 transcribe() 一次返回完整结果。
+        子类覆盖此方法可获得真正的流式输出。
+        """
+        result = await self.transcribe(audio)
+        yield result
 
     @abstractmethod
     async def warmup(self) -> None:

@@ -183,7 +183,7 @@ class AudioPipeline:
         cancel = self._session.cancel_event
 
         try:
-            # 1. ASR
+            # 1. ASR — 流式识别
             if not self._audio_buffer:
                 return
 
@@ -191,17 +191,23 @@ class AudioPipeline:
             self._audio_buffer.clear()
 
             logger.info(f"ASR processing {len(audio)} samples ({len(audio)/16000:.1f}s)")
-            asr_result = await self._asr.transcribe(audio)
 
-            if cancel.is_set():
-                return
+            # 使用流式 ASR，每识别出一个片段就推送给前端
+            final_text = ""
+            async for partial_result in self._asr.stream_transcribe(audio):
+                if cancel.is_set():
+                    return
 
-            text = asr_result.text.strip()
-            logger.info(f"ASR result: {text}")
+                if partial_result.is_final:
+                    final_text = partial_result.text.strip()
+                    await self._on_asr_result(final_text, True) if self._on_asr_result else None
+                else:
+                    # 中间结果：显示正在进行中的识别
+                    await self._on_asr_result(partial_result.text, False) if self._on_asr_result else None
 
-            await self._on_asr_result(text, True) if self._on_asr_result else None
+            logger.info(f"ASR result: {final_text}")
 
-            if not text:
+            if not final_text:
                 await self._session.transition("speaking_done", reason="empty_asr")
                 return
 
@@ -210,7 +216,7 @@ class AudioPipeline:
             await self._session.transition("processing_done", reason="response_ready")
 
             # 构建消息
-            self._history.append(Message(role="user", content=text))
+            self._history.append(Message(role="user", content=final_text))
             # 限制历史长度
             max_history = config.get("conversation.max_history_messages", 20)
             if len(self._history) > max_history + 1:  # +1 for system prompt

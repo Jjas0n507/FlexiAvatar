@@ -135,6 +135,66 @@ class WhisperASR(BaseASR):
             language=info.language if info else self._language,
         )
 
+    async def stream_transcribe(self, audio: np.ndarray):
+        """
+        流式转写 — 每识别出一个 segment 就 yield 中间结果。
+
+        这让前端可以在用户说完话之前就看到部分文本。
+        最后的结果 yield 时 is_final=True。
+        """
+        await self._ensure_model()
+
+        audio = np.asarray(audio, dtype=np.float32)
+        audio_trimmed = self._trim_silence(audio)
+        if len(audio_trimmed) < 160:
+            yield ASRResult(text="", confidence=0.0, is_final=True, language=self._language)
+            return
+
+        segments_iter, info = self._model.transcribe(
+            audio_trimmed,
+            language=self._language,
+            beam_size=self._beam_size,
+            vad_filter=True,
+            vad_parameters=dict(
+                threshold=0.5,
+                min_speech_duration_ms=250,
+            ),
+        )
+
+        texts = []
+        total_confidence = 0.0
+        count = 0
+
+        for segment in segments_iter:
+            text = segment.text.strip()
+            if text:
+                texts.append(text)
+            total_confidence += segment.avg_logprob
+            count += 1
+
+            partial_text = "".join(texts)
+            avg_conf = float(np.exp(total_confidence / count)) if count > 0 else 0.0
+
+            yield ASRResult(
+                text=partial_text,
+                confidence=min(avg_conf, 1.0),
+                is_final=False,  # 中间结果
+                language=info.language if info else self._language,
+            )
+
+        # 最终结果
+        full_text = "".join(texts)
+        avg_confidence = (
+            float(np.exp(total_confidence / count)) if count > 0 else 0.0
+        )
+
+        yield ASRResult(
+            text=full_text,
+            confidence=min(avg_confidence, 1.0),
+            is_final=True,
+            language=info.language if info else self._language,
+        )
+
     @staticmethod
     def _trim_silence(audio: np.ndarray, threshold: float = 0.01) -> np.ndarray:
         """简单的静音剪裁（移除首尾静音）"""

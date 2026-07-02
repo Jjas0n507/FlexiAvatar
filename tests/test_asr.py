@@ -107,5 +107,41 @@ async def main():
     print(f"[TIMING] Total suite time: {suite_ms:.0f}ms ({suite_ms/1000:.1f}s)")
 
 
+async def test_stream_transcribe():
+    """测试流式识别 — 验证中间结果 is_final=False，最终结果 is_final=True"""
+    import time
+    from pathlib import Path as _Path
+    TEST_DIR = _Path(__file__).parent.parent / "resources" / "test_audio"
+
+    print(f"\n{'='*50}")
+    print("Test: Streaming ASR")
+    print("=" * 50)
+
+    asr = WhisperASR(model_size=MODEL_SIZE, language="zh",
+                     device=DEVICE, compute_type=COMPUTE_TYPE)
+    await asr.warmup()
+
+    audio = SileroVAD.load_wav(str(TEST_DIR / "test_zh_hello.wav"))
+    print(f"  Audio: {len(audio)/16000:.1f}s")
+
+    intermediate_count = 0
+    final_count = 0
+    last_text = ""
+
+    async for result in asr.stream_transcribe(audio):
+        if result.is_final:
+            final_count += 1
+            print(f"  [FINAL]   text='{result.text[:50]}', conf={result.confidence:.2%}")
+        else:
+            intermediate_count += 1
+            last_text = result.text
+            print(f"  [partial] text='{result.text[:50]}', conf={result.confidence:.2%}")
+
+    assert intermediate_count >= 1, "Expected at least 1 intermediate result"
+    assert final_count == 1, f"Expected 1 final result, got {final_count}"
+    print(f"  [OK] {intermediate_count} intermediate + {final_count} final")
+
+
 if __name__ == "__main__":
     asyncio.run(main())
+    asyncio.run(test_stream_transcribe())
