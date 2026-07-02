@@ -24,6 +24,7 @@ from backend.tools.registry import ToolRegistry
 from backend.live2d.motion_controller import MotionController
 from backend.audio_pipeline import AudioPipeline
 from backend.tts.base import TTSResult
+from backend.llm.base import Message
 
 # ── 日志 ─────────────────────────────────────────
 
@@ -184,41 +185,58 @@ async def handle_audio_chunk(client_id: str, payload: dict, websocket: WebSocket
 
 
 async def handle_chat_text(client_id: str, payload: dict) -> None:
-    """处理文本聊天消息（使用流水线）"""
+    """处理文本聊天消息（使用流式 LLM）"""
     text = payload.get("text", "")
     if not text:
         return
 
     logger.info(f"文字消息: {text[:50]}...")
 
-    # 使用流水线的 TTS 和 LLM 回调
     pipeline = client_pipelines.get(client_id)
-    if pipeline and pipeline._on_llm:
-        # 模拟语音流水线
+    if pipeline and pipeline._llm and pipeline._on_llm:
         await session_manager.transition("vad_speech_start", reason="text_input")
         await session_manager.transition("vad_speech_end", reason="text_input")
+        await session_manager.transition("processing_done", reason="text_input")
 
-        response_text = f"[Echo] {text}"
-        await pipeline._on_llm(response_text, True, True)
+        pipeline._history.append(Message(role="user", content=text))
 
-        await session_manager.transition("processing_done", reason="echo")
+        response_parts: list[str] = []
+        is_first = True
 
-        # 合成 TTS
-        if pipeline._tts:
-            tts_result = await pipeline._tts.synthesize(response_text)
-            if pipeline._on_tts_audio:
-                await pipeline._on_tts_audio(tts_result)
-            if pipeline._on_live2d and tts_result.phonemes:
-                from backend.tts.base import TTSResult
-                motion_ctrl = MotionController()
-                lip_msg = motion_ctrl.build_lip_sync_message(
-                    tts_result.phonemes, time.time()
-                )
-                await pipeline._on_live2d(lip_msg)
+        async for chunk in pipeline._llm.stream_chat(
+            pipeline._history,
+            tools=None,
+            cancel_event=session_manager.cancel_event,
+        ):
+            if chunk.type == "text":
+                response_parts.append(chunk.content)
+                await pipeline._on_llm(chunk.content, is_first, False)
+                is_first = False
 
-        await session_manager.transition("speaking_done", reason="echo_complete")
+        if not is_first:
+            await pipeline._on_llm("", False, True)
+
+        response_text = "".join(response_parts).strip()
+        if response_text:
+            pipeline._history.append(Message(role="assistant", content=response_text))
+
+        # 合成 TTS（流式）
+        if pipeline._tts and response_text:
+            total_dur = 0.0
+            async for tts_result in pipeline._tts.stream_synthesize(response_text):
+                if pipeline._on_tts_audio:
+                    await pipeline._on_tts_audio(tts_result)
+                if pipeline._on_live2d and tts_result.phonemes:
+                    lip_msg = pipeline._motion.build_lip_sync_message(
+                        tts_result.phonemes, time.time()
+                    )
+                    await pipeline._on_live2d(lip_msg)
+                total_dur += tts_result.duration_ms
+            await asyncio.sleep(total_dur / 1000.0)
+
+        await session_manager.transition("speaking_done", reason="tts_finished")
     else:
-        # Fallback: 直接发文本回复
+        # Fallback: LLM 未初始化，使用 echo
         await send_to(client_id, {
             "type": "llm.stream",
             "id": str(uuid.uuid4()),

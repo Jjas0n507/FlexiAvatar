@@ -24,8 +24,18 @@ vad:
 
 # ── 语音识别 ────────────────────────────────
 asr:
-  engine: "funasr"
+  engine: "whisper"           # whisper | funasr
   language: "zh"
+  # Whisper 引擎配置 (当前使用)
+  whisper:
+    model_size: "base"        # tiny | base | small | medium | large-v3
+                               # base: RTF ~0.4x, 实时可用
+                               # tiny: RTF ~0.3x, 极速但略低准确度
+                               # small: RTF ~1.4x, 实时勉强
+    device: "cpu"
+    compute_type: "int8"       # int8 | float32 | auto
+    beam_size: 5
+  # FunASR SenseVoice 引擎配置 (备选)
   funasr:
     model: "iic/SenseVoiceSmall"
     device: "cpu"

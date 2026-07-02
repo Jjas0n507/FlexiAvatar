@@ -7,6 +7,7 @@ TTS (Text-to-Speech) 抽象基类。
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import AsyncIterator
 
 
 @dataclass
@@ -47,6 +48,18 @@ class BaseTTS(ABC):
             TTSResult 包含音频数据和音素时间线
         """
         ...
+
+    async def stream_synthesize(self, text: str) -> "AsyncIterator[TTSResult]":
+        """
+        流式合成语音 (async generator)。
+
+        逐步产出 TTSResult 块，让前端可以在全部音频合成完之前就开始播放。
+        默认实现：直接调用 synthesize() 一次返回完整结果。
+        子类覆盖此方法可获得真正的流式输出（分句合成）。
+        """
+        result = await self.synthesize(text)
+        if result.audio_bytes:
+            yield result
 
     @abstractmethod
     async def voices(self) -> list[dict]:
