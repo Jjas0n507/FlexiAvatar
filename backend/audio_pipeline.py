@@ -24,6 +24,9 @@ from backend.asr.whisper_adapter import WhisperASR
 from backend.tts.edge_tts_adapter import EdgeTTSAdapter
 from backend.tts.base import TTSResult
 from backend.live2d.motion_controller import MotionController
+from backend.llm.openai_adapter import OpenAIAdapter
+from backend.llm.base import Message
+from backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger("pipeline")
 
@@ -54,8 +57,12 @@ class AudioPipeline:
         # 引擎 (懒初始化)
         self._vad: SileroVAD | None = None
         self._asr: WhisperASR | None = None
+        self._llm: OpenAIAdapter | None = None
         self._tts: EdgeTTSAdapter | None = None
         self._motion: MotionController | None = None
+
+        # 对话历史 (保留上下文)
+        self._history: list[Message] = []
 
         # 音频缓冲
         self._audio_buffer: list[np.ndarray] = []
@@ -67,6 +74,8 @@ class AudioPipeline:
         """懒初始化所有引擎"""
         if self._vad is None:
             self._vad = SileroVAD(threshold=0.5)
+
+            # ASR
             model_size = config.get("asr.whisper.model_size", "base")
             device = config.get("asr.whisper.device", "cpu")
             compute_type = config.get("asr.whisper.compute_type", "int8")
@@ -75,8 +84,20 @@ class AudioPipeline:
             self._asr = WhisperASR(model_size=model_size, language="zh",
                                    device=device, compute_type=compute_type,
                                    beam_size=beam_size)
+
+            # LLM
+            llm_model = config.get("llm.openai.model", "gpt-4o")
+            logger.info(f"Initializing LLM: {llm_model}")
+            self._llm = OpenAIAdapter()
+
+            # TTS
             self._tts = EdgeTTSAdapter(voice="zh-CN-XiaoxiaoNeural", speed="+10%")
             self._motion = MotionController()
+
+            # 初始化对话历史
+            system_prompt = config.get("llm.system_prompt", "")
+            if system_prompt:
+                self._history = [Message(role="system", content=system_prompt)]
 
             await self._asr.warmup()
             logger.info("All engines initialized")
@@ -158,7 +179,7 @@ class AudioPipeline:
     # ── 语音处理 ────────────────────────────────
 
     async def _process_speech(self):
-        """处理收集到的语音段: ASR → LLM(echo) → TTS"""
+        """处理收集到的语音段: ASR → LLM(streaming) → TTS"""
         cancel = self._session.cancel_event
 
         try:
@@ -184,19 +205,62 @@ class AudioPipeline:
                 await self._session.transition("speaking_done", reason="empty_asr")
                 return
 
-            # 2. LLM (阶段 3 替换为真正的 LLM)
-            # 当前使用 echo
-            response_text = f"你说：{text}"
+            # 2. LLM — 流式生成
+            # 先发送处理中状态，准备进入 SPEAKING
+            await self._session.transition("processing_done", reason="response_ready")
 
-            if self._on_llm:
-                await self._on_llm(response_text, True, True)
+            # 构建消息
+            self._history.append(Message(role="user", content=text))
+            # 限制历史长度
+            max_history = config.get("conversation.max_history_messages", 20)
+            if len(self._history) > max_history + 1:  # +1 for system prompt
+                # 保留 system prompt + 最近的消息
+                system_msgs = [m for m in self._history if m.role == "system"]
+                non_system = [m for m in self._history if m.role != "system"]
+                self._history = system_msgs + non_system[-(max_history):]
+
+            # 收集流式响应文本
+            response_parts: list[str] = []
+            is_first = True
+            tools_used = False
+
+            logger.info("LLM streaming start")
+            async for chunk in self._llm.stream_chat(
+                self._history,
+                tools=None,  # 暂时不传工具，先跑通基本流式
+                cancel_event=cancel,
+            ):
+                if cancel.is_set():
+                    return
+
+                if chunk.type == "text":
+                    response_parts.append(chunk.content)
+                    if self._on_llm:
+                        await self._on_llm(chunk.content, is_first, False)
+                        is_first = False
+                elif chunk.type == "tool_call":
+                    tools_used = True
+                    logger.info(f"LLM tool call: {chunk.tool_call}")
+
+            # 发送最后一个空 chunk 标记结束
+            if self._on_llm and not is_first:
+                await self._on_llm("", False, True)
+
+            response_text = "".join(response_parts).strip()
+            logger.info(f"LLM result: {response_text[:80]}...")
+
+            if not response_text and not tools_used:
+                response_text = "抱歉，我不太明白你的意思。"
+
+            # 保存到历史
+            if response_text:
+                self._history.append(Message(role="assistant", content=response_text))
 
             if cancel.is_set():
                 return
 
             # 3. TTS
             logger.info(f"TTS synthesizing: {response_text[:50]}...")
-            await self._session.transition("processing_done", reason="response_ready")
 
             tts_result = await self._tts.synthesize(response_text)
 
@@ -232,7 +296,7 @@ class AudioPipeline:
         except Exception as e:
             logger.error(f"Speech processing error: {e}", exc_info=True)
             try:
-                await self._session.reset()
+                await self._session.transition("speaking_done", reason="error")
             except Exception:
                 pass
 
@@ -253,6 +317,7 @@ class AudioPipeline:
     async def shutdown(self):
         """关闭流水线"""
         self._audio_buffer.clear()
+        self._history.clear()
         while not self._input_queue.empty():
             self._input_queue.get_nowait()
         logger.info("Pipeline shutdown complete")
