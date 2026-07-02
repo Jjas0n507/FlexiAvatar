@@ -40,6 +40,13 @@ async def test_stream_chat_basic(adapter: OpenAIAdapter):
         print("[SKIP] No API key configured — set OPENAI_API_KEY in .env")
         return
 
+    # 如果使用 DeepSeek，用 deepseek-chat 模型覆盖 gpt-4o
+    if "deepseek" in adapter._base_url:
+        adapter._model = "deepseek-chat"
+
+    print(f"  Model: {adapter._model}")
+    print(f"  Base URL: {adapter._base_url}")
+
     print(f"  [timestamp] start: {__import__('time').strftime('%H:%M:%S')}")
 
     messages = [
@@ -66,6 +73,9 @@ async def test_stream_chat_with_cancel(adapter: OpenAIAdapter):
     if not adapter._api_key or adapter._api_key.startswith("${"):
         print("[SKIP] No API key configured")
         return
+
+    if "deepseek" in adapter._base_url:
+        adapter._model = "deepseek-chat"
 
     cancel = asyncio.Event()
     messages = [
