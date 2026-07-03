@@ -32,6 +32,9 @@ frontend/dist-electron/
 *.swp
 *.swo
 
+# Claude Code (personal config, not shared)
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
