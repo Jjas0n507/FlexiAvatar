@@ -12,8 +12,12 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-# 加载 .env 文件
-load_dotenv()
+# 加载 .env 文件 — 从项目根目录和 backend 目录两个位置查找
+_ENV_BACKEND = Path(__file__).parent / ".env"
+_ENV_PROJECT = Path(__file__).parent.parent / ".env"
+for _env_path in (_ENV_BACKEND, _ENV_PROJECT):
+    if _env_path.exists():
+        load_dotenv(_env_path)
 
 
 def _resolve_env(value: str) -> str:

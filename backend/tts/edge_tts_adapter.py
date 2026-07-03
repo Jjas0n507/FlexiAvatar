@@ -97,8 +97,50 @@ class EdgeTTSAdapter(BaseTTS):
             text=text,
         )
 
+    async def stream_synthesize(self, text: str):
+        """
+        流式合成: 按句子切分文本，逐句合成并 yield。
+
+        好处: 第一句话的音频在前端开始播放时，后续句子还在合成中。
+        这显著降低了"从 LLM 完成到听到声音"的延迟。
+        """
+        if not text.strip():
+            return
+
+        # 按中文标点切分句子
+        sentences = self._split_sentences(text)
+        if not sentences:
+            return
+
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+            result = await self.synthesize(sentence)
+            if result.audio_bytes:
+                yield result
+
     async def voices(self) -> list[dict]:
         return _ZH_VOICES
+
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        """将文本按中文标点切分为句子，保留标点"""
+        import re
+        # 在句末标点处切分，保留标点在句子末尾
+        parts = re.split(r'(?<=[。！？!?\n])', text)
+        # 合并过短的片段
+        result = []
+        buffer = ""
+        for part in parts:
+            if not part.strip():
+                continue
+            buffer += part
+            if len(buffer) >= 4 or any(p in buffer for p in '。！？!?\n'):
+                result.append(buffer)
+                buffer = ""
+        if buffer:
+            result.append(buffer)
+        return result
 
     # ── 私有 ──────────────────────────────────────
 
