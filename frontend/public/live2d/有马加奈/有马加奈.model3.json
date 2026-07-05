@@ -1,0 +1,47 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "有马加奈.moc3",
+		"Textures": [
+			"有马加奈.4096/texture_00.png",
+			"有马加奈.4096/texture_01.png"
+		],
+		"Physics": "有马加奈.physics3.json",
+		"DisplayInfo": "有马加奈.cdi3.json",
+		"Motions": {
+			"Idle": [
+				{"File": "待机.motion3.json", "FadeInTime": 0.5, "FadeOutTime": 0.5},
+				{"File": "害羞嘴.motion3.json", "FadeInTime": 0.5, "FadeOutTime": 0.5}
+			],
+			"Random": [
+				{"File": "随机姿势.motion3.json", "FadeInTime": 0.5, "FadeOutTime": 0.5}
+			]
+		},
+		"Expressions": [
+			{"Name": "害羞", "File": "害羞.exp3.json"},
+			{"Name": "空洞眼", "File": "空洞眼.exp3.json"},
+			{"Name": "哭泣", "File": "哭泣.exp3.json"},
+			{"Name": "笔芯", "File": "笔芯.exp3.json"},
+			{"Name": "繁星眼", "File": "繁星眼.exp3.json"},
+			{"Name": "麦克风", "File": "麦克风.exp3.json"}
+		]
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"ParamEyeLOpen",
+				"ParamEyeROpen"
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": [
+				"ParamMouthOpenY",
+				"ParamMouthForm"
+			]
+		}
+	]
+}

@@ -8,21 +8,19 @@
 import { useEffect, useCallback } from "react";
 import { wsClient } from "../services/ws-client";
 import { useAgentStore } from "../stores/agent-store";
-import type { WSMessage } from "../types";
+import type { WSMessage, SessionState } from "../types";
 
 export function useWebSocket() {
   const {
     setWsConnected,
     setSessionState,
     appendStreamingText,
-    updateLastAssistant,
     addMessage,
     setCurrentASRText,
     updateToolProgress,
     setLive2DControl,
     setLastError,
     setAvailableTools,
-    streamingText,
   } = useAgentStore();
 
   useEffect(() => {
@@ -33,7 +31,7 @@ export function useWebSocket() {
     unsubs.push(
       wsClient.on("state.change", (msg: WSMessage) => {
         const payload = msg.payload as Record<string, unknown>;
-        setSessionState(payload.state as string);
+        setSessionState(payload.state as SessionState);
         if (payload.tools) {
           setAvailableTools(payload.tools as string[]);
         }
@@ -128,8 +126,11 @@ export function useWebSocket() {
     wsClient.sendInterrupt();
   }, []);
 
+  // ponytail: 从 store 读取 (reactive)，不是 wsClient.isConnected (非 reactive getter)
+  const isConnected = useAgentStore((s) => s.wsConnected);
+
   return {
-    isConnected: wsClient.isConnected,
+    isConnected,
     sendText,
     sendInterrupt,
   };

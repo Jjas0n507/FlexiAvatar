@@ -53,7 +53,7 @@ export interface Phoneme {
 }
 
 export interface Live2DControlPayload {
-  command: "lipSync" | "expression" | "motion" | "idle" | "reset" | "interrupt" | "state";
+  command: "lip_sync" | "expression" | "motion" | "idle" | "reset" | "interrupt" | "state";
   lipSyncFrames?: LipSyncFrame[];
   expression?: ExpressionParams;
   motion?: MotionParams;

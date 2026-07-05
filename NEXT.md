@@ -1,24 +1,25 @@
 # 下一步行动
 
 > ⚠️ 此文件记录**短期**待办，完成后划掉或删除。
-> 最后更新：2026-07-03
+> 最后更新：2026-07-05
 
-## 当前优先级
+## 当前优先级（Phase 4 遗留 + 新发现问题）
 
-### Phase 3 收尾
-- [ ] 流式 ASR 嘈杂环境准确率验证
-- [ ] LLM 流式输出 + 工具调用集成测试
-- [ ] TTS 逐句播放与前端音画同步调优
-- [ ] 中断恢复后上下文连贯性测试
+### 🔴 高优先级
+- [ ] **输入→回复延迟优化**: 首轮 ASR Whisper base 模型加载 ~50s，后续 ~10s。方案：启动时预加载模型（`_init_engines()` 在 startup 调用）、Edge-TTS 考虑备选（Azure TTS / 本地模型）
+- [ ] **口型-语音同步**: 当前用 `setTimeout` 帧序列独立播放，与 `AudioContext.currentTime` 无关联。方案：前端收到 TTS WAV + phonemes 后，用 `AudioContext` 解码播放，口型帧绑定 `currentTime` 偏移量
 
-### 技术债
-- [ ] 安装 ffmpeg（`winget install ffmpeg`），修复 `test_tts.py`
-- [ ] 创建 `.env.example` 模板
-- [ ] LLM 适配器从硬编码改为配置驱动
+### 🟡 中优先级
+- [ ] JS bundle code splitting（live2d-renderer 懒加载，584KB）
+- [ ] `ScriptProcessorNode` → `AudioWorklet`（麦克风采集，已弃用 API）
+- [ ] 模型 `随机姿势.motion3.json` 7MB，首帧加载延迟
 
-### 下一阶段（Phase 4 — Live2D）
-- [ ] 前端集成 Cubism SDK + 加载模型
-- [ ] 口型同步引擎（对接 `motion_controller.py`）
-- [ ] 表情与身体动作系统
+### 🟢 技术债
+- [ ] 表情切换加平滑过渡（lerp 参数值而非直接设）
+- [ ] WebSocket 断线自动重连 + 指数退避
+- [ ] Electron 打包集成测试
 
-> Phase 4 完整任务见 `DESIGN_AND_PLAN.md` 第 1543-1624 行。
+### 下一阶段（Phase 5 — 工具系统）
+- [ ] 后端工具系统已就位（`backend/tools/`），待集成测试
+- [ ] LLM 工具调用端到端验证
+- [ ] 天气、时间、计算等内置工具完善
