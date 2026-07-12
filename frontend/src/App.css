@@ -21,8 +21,23 @@ html, body, #root {
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
 }
 
-/* ── Live2D 占位 ───────────────────────── */
-.live2d-placeholder {
+/* ── Live2D 画布 ───────────────────────── */
+.live2d-canvas-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.live2d-canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.live2d-status-overlay {
   position: absolute;
   top: 0;
   left: 0;
@@ -31,20 +46,22 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 1;
   pointer-events: none;
 }
 
-.live2d-box {
-  text-align: center;
-  color: rgba(255, 255, 255, 0.4);
-  font-size: 14px;
+.live2d-status-text {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 16px;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
-.live2d-emoji {
-  font-size: 64px;
-  display: block;
-  margin-bottom: 12px;
-  animation: float 3s ease-in-out infinite;
+.live2d-status-error {
+  color: #f44336;
+  animation: none;
+  font-size: 14px;
+  max-width: 80%;
+  text-align: center;
 }
 
 /* ── 控制栏 ────────────────────────────── */
@@ -90,7 +107,34 @@ html, body, #root {
   background: rgba(244, 67, 54, 0.3);
 }
 
-.text-input-group {
+/* ── 麦克风按钮 ──────────────────────── */
+
+.mic-btn {
+  padding: 8px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.mic-btn.active {
+  background: rgba(244, 67, 54, 0.25);
+  border-color: rgba(244, 67, 54, 0.5);
+}
+
+.mic-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mic-btn.active:hover {
+  background: rgba(244, 67, 54, 0.4);
+}
+
+/* ── 文本输入 ──────────────────────── */
   display: flex;
   gap: 8px;
   flex: 1;

@@ -55,8 +55,9 @@ logger.info(f"已加载 {tool_count} 个工具: {tool_registry.list_tools()}")
 
 @session_manager.on_transition
 async def log_state_transition(from_state, to_state, event, reason):
-    """记录所有状态转换"""
+    """记录所有状态转换并广播到客户端"""
     logger.info(f"状态转换: {from_state.value} → {to_state.value} ({event}) {reason}")
+    await broadcast_state(to_state, reason)
 
 
 # ── WebSocket 连接管理 ──────────────────────────
@@ -184,7 +185,7 @@ async def handle_audio_chunk(client_id: str, payload: dict, websocket: WebSocket
         pipeline.feed_audio(audio_np)
 
 
-async def handle_chat_text(client_id: str, payload: dict) -> None:
+async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) -> None:
     """处理文本聊天消息（使用流式 LLM）"""
     text = payload.get("text", "")
     if not text:
@@ -192,8 +193,11 @@ async def handle_chat_text(client_id: str, payload: dict) -> None:
 
     logger.info(f"文字消息: {text[:50]}...")
 
-    pipeline = client_pipelines.get(client_id)
-    if pipeline and pipeline._llm and pipeline._on_llm:
+    # 确保 pipeline 已创建并完成引擎初始化
+    pipeline = await _get_or_create_pipeline(client_id, websocket)
+    await pipeline._init_engines()  # 等待 ASR/LLM/TTS 初始化完成
+
+    if pipeline._llm and pipeline._on_llm:
         await session_manager.transition("vad_speech_start", reason="text_input")
         await session_manager.transition("vad_speech_end", reason="text_input")
         await session_manager.transition("processing_done", reason="text_input")
@@ -220,19 +224,23 @@ async def handle_chat_text(client_id: str, payload: dict) -> None:
         if response_text:
             pipeline._history.append(Message(role="assistant", content=response_text))
 
-        # 合成 TTS（流式）
+        # 合成 TTS（流式），单句失败不中断整体
         if pipeline._tts and response_text:
             total_dur = 0.0
-            async for tts_result in pipeline._tts.stream_synthesize(response_text):
-                if pipeline._on_tts_audio:
-                    await pipeline._on_tts_audio(tts_result)
-                if pipeline._on_live2d and tts_result.phonemes:
-                    lip_msg = pipeline._motion.build_lip_sync_message(
-                        tts_result.phonemes, time.time()
-                    )
-                    await pipeline._on_live2d(lip_msg)
-                total_dur += tts_result.duration_ms
-            await asyncio.sleep(total_dur / 1000.0)
+            try:
+                async for tts_result in pipeline._tts.stream_synthesize(response_text):
+                    if pipeline._on_tts_audio:
+                        await pipeline._on_tts_audio(tts_result)
+                    if pipeline._on_live2d and tts_result.phonemes:
+                        lip_msg = pipeline._motion.build_lip_sync_message(
+                            tts_result.phonemes, time.time()
+                        )
+                        await pipeline._on_live2d(lip_msg)
+                    total_dur += tts_result.duration_ms
+            except Exception as e:
+                logger.warning(f"TTS 合成失败（跳过）: {e}")
+            if total_dur > 0:
+                await asyncio.sleep(total_dur / 1000.0)
 
         await session_manager.transition("speaking_done", reason="tts_finished")
     else:
@@ -368,8 +376,8 @@ async def websocket_endpoint(websocket: WebSocket):
             handler = MESSAGE_HANDLERS.get(msg_type)
             if handler:
                 try:
-                    # audio.chunk 需要传递 websocket 对象
-                    if msg_type == "audio.chunk":
+                    # audio.chunk 和 chat.text 需要传递 websocket 对象
+                    if msg_type in ("audio.chunk", "chat.text"):
                         await handler(client_id, payload, websocket)
                     else:
                         await handler(client_id, payload)

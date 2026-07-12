@@ -148,26 +148,15 @@ class EdgeTTSAdapter(BaseTTS):
     def _mp3_to_wav(mp3_data: bytes) -> tuple[bytes, int, float]:
         """将 MP3 字节转为 WAV PCM (24kHz, 16bit, mono)"""
         from pydub import AudioSegment
-        import tempfile, os
 
-        # 写入临时 MP3 文件
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            tmp.write(mp3_data)
-            tmp_path = tmp.name
+        # 直接从内存读取，不写临时文件（Windows 文件锁问题）
+        audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
+        sample_rate = audio.frame_rate
+        duration_ms = len(audio)
 
-        try:
-            audio = AudioSegment.from_mp3(tmp_path)
-            sample_rate = audio.frame_rate
-            duration_ms = len(audio)
-
-            # 导出为 WAV
-            wav_buf = io.BytesIO()
-            audio.export(wav_buf, format="wav")
-            wav_bytes = wav_buf.getvalue()
-
-            return wav_bytes, sample_rate, duration_ms
-        finally:
-            os.unlink(tmp_path)
+        wav_buf = io.BytesIO()
+        audio.export(wav_buf, format="wav")
+        return wav_buf.getvalue(), sample_rate, duration_ms
 
     @staticmethod
     def _boundaries_to_phonemes(

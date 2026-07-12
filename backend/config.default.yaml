@@ -77,7 +77,7 @@ llm:
 
 # ── Live2D ───────────────────────────────────
 live2d:
-  model_path: "frontend/public/live2d/hiyori/hiyori.model3.json"
+  model_path: "frontend/public/live2d/有马加奈/有马加奈.model3.json"
   scale: 1.0
   auto_blink: true
   blink_interval_min_ms: 2000

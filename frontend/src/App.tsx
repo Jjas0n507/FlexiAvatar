@@ -6,13 +6,18 @@
 
 import React, { useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
+import { useAudioPlayback } from "./hooks/useAudioPlayback";
+import { useMicCapture } from "./hooks/useMicCapture";
 import { StatusIndicator } from "./components/StatusIndicator";
 import { ChatBubble } from "./components/ChatBubble";
+import Live2DCanvas from "./components/Live2DCanvas";
 import { useAgentStore } from "./stores/agent-store";
 import "./App.css";
 
 const App: React.FC = () => {
   const { isConnected, sendText, sendInterrupt } = useWebSocket();
+  useAudioPlayback();
+  const { startMic, stopMic, isRecording } = useMicCapture();
   const sessionState = useAgentStore((s) => s.sessionState);
   const availableTools = useAgentStore((s) => s.availableTools);
   const [inputText, setInputText] = useState("");
@@ -33,13 +38,8 @@ const App: React.FC = () => {
 
   return (
     <div className="app-container">
-      {/* Live2D 画布占位 (阶段 4 替换为实际渲染) */}
-      <div className="live2d-placeholder">
-        <div className="live2d-box">
-          <span className="live2d-emoji">(^.^)</span>
-          <p>Live2D 将在阶段 4 加载</p>
-        </div>
-      </div>
+      {/* Live2D 角色渲染 */}
+      <Live2DCanvas />
 
       {/* 状态指示器 */}
       <StatusIndicator />
@@ -63,6 +63,15 @@ const App: React.FC = () => {
           title="打断 AI"
         >
           ⏹ 打断
+        </button>
+
+        {/* 麦克风按钮 */}
+        <button
+          className={`mic-btn ${isRecording ? "active" : ""}`}
+          onClick={isRecording ? stopMic : startMic}
+          title={isRecording ? "停止录音" : "开始录音"}
+        >
+          {isRecording ? "🔴 停止" : "🎤 说话"}
         </button>
 
         {/* 文字输入 (调试用) */}

@@ -10,9 +10,9 @@
  */
 
 import { create } from "zustand";
+import { subscribeWithSelector } from "zustand/middleware";
 import type {
   SessionState,
-  LLMStreamPayload,
   ToolProgressPayload,
   Live2DControlPayload,
 } from "../types";
@@ -66,7 +66,8 @@ export interface AgentState {
   setAvailableTools: (tools: string[]) => void;
 }
 
-export const useAgentStore = create<AgentState>((set, get) => ({
+export const useAgentStore = create<AgentState>()(
+  subscribeWithSelector((set, get) => ({
   // 连接
   wsConnected: false,
   setWsConnected: (connected) => set({ wsConnected: connected }),
@@ -146,4 +147,5 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   // 配置
   availableTools: [],
   setAvailableTools: (tools) => set({ availableTools: tools }),
-}));
+  }))
+);
