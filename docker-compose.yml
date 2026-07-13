@@ -1,0 +1,46 @@
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: flexiavatar-ollama
+    ports: ["11434:11434"]
+    volumes: [ollama_data:/root/.ollama]
+    devices:
+      - /dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "44"     # video
+      - "110"    # render
+    environment:
+      - ROCR_VISIBLE_DEVICES=0
+    restart: unless-stopped
+    profiles: [gpu]
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flexiavatar-backend
+    ports: ["8765:8765"]
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./resources/models:/app/resources/models:rw
+    devices:
+      - /dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - "44"     # video
+      - "110"    # render
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_HUB_ENABLE_HF_XET=0
+      - HF_HUB_DISABLE_XET=1
+      - ROCR_VISIBLE_DEVICES=0
+      - OLLAMA_HOST=http://ollama:11434
+    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --log-level info
+    restart: unless-stopped
+    profiles: [gpu, cpu]
+
+volumes:
+  ollama_data:

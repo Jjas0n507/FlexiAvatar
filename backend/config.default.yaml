@@ -42,6 +42,11 @@ asr:
     use_itn: true
     use_punc: true
 
+# ── GPU 配置 ─────────────────────────────────
+gpu:
+  rocm_enabled: false
+  device_id: 0
+
 # ── 语音合成 ────────────────────────────────
 tts:
   engine: "edge-tts"
@@ -49,6 +54,9 @@ tts:
     voice: "zh-CN-XiaoxiaoNeural"
     speed: "+10%"
     pitch: "+0Hz"
+  chattts:
+    seed: 42
+    temperature: 0.3
 
 # ── 大语言模型 ──────────────────────────────
 llm:

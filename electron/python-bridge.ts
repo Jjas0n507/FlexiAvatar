@@ -11,6 +11,11 @@
 import { spawn, ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
+import { fileURLToPath } from "url";
+
+// ESM 兼容: __dirname 在 ES 模块中不可用
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const BACKEND_PORT = 8765;
 const HEALTH_CHECK_INTERVAL_MS = 5000;
@@ -53,8 +58,49 @@ export class PythonBridge {
 
   /**
    * 启动 Python 后端
+   *
+   * Docker 模式 (FLEXIAVATAR_DOCKER=1):
+   *   仅轮询 health check，不 spawn 子进程（容器由用户通过 docker compose 管理）
+   *
+   * 本地模式:
+   *   spawn Python uvicorn 子进程
    */
   async start(): Promise<boolean> {
+    // Docker 模式：只做 health check 轮询
+    if (process.env.FLEXIAVATAR_DOCKER === "1") {
+      return this._startWithHealthCheck();
+    }
+    return this._startNative();
+  }
+
+  /**
+   * Docker 模式启动 — 等待外部容器就绪
+   */
+  private async _startWithHealthCheck(): Promise<boolean> {
+    console.log("[PythonBridge] Docker mode — waiting for backend container...");
+
+    for (let i = 0; i < 30; i++) {
+      const healthy = await this.healthCheck();
+      if (healthy) {
+        console.log("[PythonBridge] Backend container ready");
+        this._ready = true;
+        this.restartCount = 0;
+        this.startHealthCheck();
+        this.onReady?.();
+        return true;
+      }
+      console.log(`[PythonBridge] Waiting for backend... (${i + 1}/30)`);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
+    console.error("[PythonBridge] Backend container did not become ready");
+    return false;
+  }
+
+  /**
+   * 本地模式启动 — spawn Python 子进程
+   */
+  private async _startNative(): Promise<boolean> {
     const pythonPath = this.findPython();
     const backendDir = path.join(__dirname, "..", "..", "backend");
 
@@ -156,9 +202,18 @@ export class PythonBridge {
 
   /**
    * 停止 Python 后端
+   *
+   * Docker 模式下不下发信号（容器由用户管理）
    */
   async stop(): Promise<void> {
     this.stopHealthCheck();
+
+    // Docker 模式：不杀容器
+    if (process.env.FLEXIAVATAR_DOCKER === "1") {
+      console.log("[PythonBridge] Docker mode — leaving container running");
+      this._ready = false;
+      return;
+    }
 
     if (!this.process) return;
 

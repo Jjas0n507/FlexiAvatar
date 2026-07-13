@@ -19,12 +19,9 @@ import numpy as np
 
 from backend.config import config
 from backend.session.manager import SessionManager, SessionState
-from backend.vad.silero_adapter import SileroVAD
-from backend.asr.whisper_adapter import WhisperASR
-from backend.tts.edge_tts_adapter import EdgeTTSAdapter
+from backend.adapters import create_vad, create_asr, create_llm, create_tts
 from backend.tts.base import TTSResult
 from backend.live2d.motion_controller import MotionController
-from backend.llm.openai_adapter import OpenAIAdapter
 from backend.llm.base import Message
 from backend.tools.registry import ToolRegistry
 
@@ -54,11 +51,11 @@ class AudioPipeline:
         self._on_asr_result = on_asr_result
         self._on_llm = on_llm_stream
 
-        # 引擎 (懒初始化)
-        self._vad: SileroVAD | None = None
-        self._asr: WhisperASR | None = None
-        self._llm: OpenAIAdapter | None = None
-        self._tts: EdgeTTSAdapter | None = None
+        # 引擎 (懒初始化，具体类型由 config 的 engine 字段决定)
+        self._vad = None       # type: BaseVAD | None
+        self._asr = None       # type: BaseASR | None
+        self._llm = None       # type: BaseLLM | None
+        self._tts = None       # type: BaseTTS | None
         self._motion: MotionController | None = None
 
         # 对话历史 (保留上下文)
@@ -73,25 +70,11 @@ class AudioPipeline:
     async def _init_engines(self):
         """懒初始化所有引擎"""
         if self._vad is None:
-            self._vad = SileroVAD(threshold=0.5)
-
-            # ASR
-            model_size = config.get("asr.whisper.model_size", "base")
-            device = config.get("asr.whisper.device", "cpu")
-            compute_type = config.get("asr.whisper.compute_type", "int8")
-            beam_size = config.get("asr.whisper.beam_size", 5)
-            logger.info(f"Initializing ASR: Whisper {model_size} on {device} ({compute_type})")
-            self._asr = WhisperASR(model_size=model_size, language="zh",
-                                   device=device, compute_type=compute_type,
-                                   beam_size=beam_size)
-
-            # LLM
-            llm_model = config.get("llm.openai.model", "gpt-4o")
-            logger.info(f"Initializing LLM: {llm_model}")
-            self._llm = OpenAIAdapter()
-
-            # TTS
-            self._tts = EdgeTTSAdapter(voice="zh-CN-XiaoxiaoNeural", speed="+10%")
+            # 使用工厂函数创建引擎（引擎类型由 config 的 engine 字段决定）
+            self._vad = create_vad(config)
+            self._asr = create_asr(config)
+            self._llm = create_llm(config)
+            self._tts = create_tts(config)
             self._motion = MotionController()
 
             # 初始化对话历史

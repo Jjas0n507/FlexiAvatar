@@ -10,7 +10,12 @@
 
 import { app, BrowserWindow, session } from "electron";
 import path from "path";
+import { fileURLToPath } from "url";
 import { PythonBridge } from "./python-bridge";
+
+// ESM 兼容: __dirname 在 ES 模块中不可用
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // 开发模式检测
 const isDev = !app.isPackaged;

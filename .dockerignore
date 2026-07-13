@@ -1,0 +1,9 @@
+node_modules/
+.git/
+frontend/
+electron/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+*.log
