@@ -133,28 +133,96 @@ class MotionController:
 
     # ── 口型生成 ──────────────────────────────────
 
+    # Phase 1.2: 闭口阈值 (ms)
+    CLOSE_GAP_THRESHOLD_MS = 200
+    CLOSE_AFTER_LAST_MS = 100
+
     def phonemes_to_lip_sync(self, phonemes: list[Phoneme]) -> list[dict]:
         """
         将音素时间线转换为 Live2D 口型帧序列。
 
+        Phase 1.2 改进:
+        - 不再强制在每个音素后插入 N 帧
+        - gap ≤ 200ms: 不插入闭口帧（前端自然插值过渡）
+        - gap > 200ms: 插入闭口帧
+        - 标点字符 (。！？) 强制闭口
+        - 最后一个音素后追加闭口帧
+
         有 profile 时：仅输出模型支持的参数（open_y + form）。
         无 profile 时：fallback 到硬编码值（含 ParamMouthA/I/U/E/O）。
         """
-        frames = []
-        for p in phonemes:
+        if not phonemes:
+            return []
+
+        _PUNCTUATION = frozenset({"。", "！", "？", "!", "?", ".", "\n"})
+        frames: list[dict] = []
+
+        for i, p in enumerate(phonemes):
             mouth = pinyin_final_to_mouth(p.phoneme)
             params = self._mouth_params(mouth)
+
+            # Phase 1.4: 音量驱动口型缩放
+            # open_y *= (0.3 + 0.7 * volume) — 最低保持 30% 开口
+            # form *= volume
+            volume = getattr(p, "volume", 0.5)
+            if mouth != "N":  # 闭口帧不缩放
+                scaled_params = dict(params)
+                for key, val in scaled_params.items():
+                    if self.profile is not None:
+                        pid = self.profile.parameters
+                        if key == pid.lip_open_y:
+                            scaled_params[key] = round(val * (0.3 + 0.7 * volume), 3)
+                        elif key == pid.lip_form:
+                            scaled_params[key] = round(val * volume, 3)
+                    else:
+                        # Fallback: 检测参数名决定缩放方式
+                        if "Open" in key:
+                            scaled_params[key] = round(val * (0.3 + 0.7 * volume), 3)
+                        elif "Form" in key:
+                            scaled_params[key] = round(val * volume, 3)
+                params = scaled_params
+
+            # 当前音素的开口帧
             frames.append({
                 "time_ms": p.start_ms,
                 "mouth": mouth,
                 "params": params,
             })
-            # 在音素结束时添加一个"闭合"帧作为过渡
-            frames.append({
-                "time_ms": p.end_ms,
-                "mouth": "N",
-                "params": self._mouth_params("N"),
-            })
+
+            # 决定是否需要在当前音素结束后插入闭口帧
+            is_last = (i == len(phonemes) - 1)
+            is_punctuation = p.char in _PUNCTUATION
+
+            if is_punctuation:
+                # 标点字符强制闭口
+                frames.append({
+                    "time_ms": p.end_ms,
+                    "mouth": "N",
+                    "params": self._mouth_params("N"),
+                })
+                continue
+
+            if is_last:
+                # 最后一个音素后追加闭口帧
+                close_time = p.end_ms + self.CLOSE_AFTER_LAST_MS
+                frames.append({
+                    "time_ms": close_time,
+                    "mouth": "N",
+                    "params": self._mouth_params("N"),
+                })
+                continue
+
+            # 检查与下一个音素的间隔
+            next_p = phonemes[i + 1]
+            gap = next_p.start_ms - p.end_ms
+            if gap > self.CLOSE_GAP_THRESHOLD_MS:
+                # 长间隔 → 插入闭口帧，在下个音素开始时重新开口
+                frames.append({
+                    "time_ms": p.end_ms,
+                    "mouth": "N",
+                    "params": self._mouth_params("N"),
+                })
+
         return frames
 
     def _mouth_params(self, mouth: str) -> dict[str, float]:

@@ -22,6 +22,7 @@ import edge_tts
 
 from backend.tts.base import BaseTTS, TTSResult, Phoneme
 from backend.live2d.mouth_shapes import pinyin_final_to_mouth
+from backend.audio.prosody import extract_volume_envelope
 
 logger = logging.getLogger("tts")
 
@@ -74,6 +75,14 @@ class EdgeTTSAdapter(BaseTTS):
         raw_audio = b"".join(audio_chunks)
         wav_bytes, sample_rate, duration_ms = self._mp3_to_wav(raw_audio)
         phonemes = self._boundaries_to_phonemes(sentence_boundaries, duration_ms)
+
+        # Phase 1.4: 提取音量包络并注入到 phoneme
+        if phonemes and wav_bytes:
+            try:
+                volumes = extract_volume_envelope(wav_bytes, frame_ms=50.0)
+                self._inject_volumes(phonemes, volumes, duration_ms)
+            except Exception:
+                pass  # 音量提取失败不阻塞 TTS
 
         return TTSResult(
             audio_bytes=wav_bytes,
@@ -131,6 +140,25 @@ class EdgeTTSAdapter(BaseTTS):
     # ── 私有 ──────────────────────────────────────
 
     @staticmethod
+    def _inject_volumes(phonemes: list[Phoneme], volumes: list[float], total_duration_ms: float) -> None:
+        """
+        Phase 1.4: 将 RMS 音量注入到每个 phoneme 的 volume 字段。
+
+        每个 phoneme 取其时间区间内的平均音量。
+        """
+        if not volumes or total_duration_ms <= 0:
+            return
+
+        frame_ms = total_duration_ms / len(volumes)
+
+        for p in phonemes:
+            start_idx = max(0, int(p.start_ms / frame_ms))
+            end_idx = min(len(volumes), max(start_idx + 1, int(p.end_ms / frame_ms) + 1))
+            relevant = volumes[start_idx:end_idx]
+            if relevant:
+                p.volume = round(sum(relevant) / len(relevant), 4)
+
+    @staticmethod
     def _mp3_to_wav(mp3_data: bytes) -> tuple[bytes, int, float]:
         """将 MP3 字节转为 WAV PCM (24kHz, 16bit, mono)"""
         from pydub import AudioSegment
@@ -182,6 +210,7 @@ class EdgeTTSAdapter(BaseTTS):
                     phoneme=mouth,
                     start_ms=round(char_start, 1),
                     end_ms=round(char_end, 1),
+                    char=char,
                 ))
 
         return phonemes

@@ -26,8 +26,17 @@ PINYIN_TO_MOUTH: dict[str, str] = {
 }
 
 
+# 口型字母本身也算有效输入（幂等：传入口型字母直接返回）
+_VALID_MOUTH_SHAPES = frozenset({"A", "I", "U", "E", "O", "N"})
+
+
 def pinyin_final_to_mouth(final: str) -> str:
-    """将拼音韵母映射到 Live2D 口型 (A/I/U/E/O/N)"""
+    """将拼音韵母映射到 Live2D 口型 (A/I/U/E/O/N)。
+
+    幂等：如果输入已经是口型字母，直接返回。
+    """
+    if final in _VALID_MOUTH_SHAPES:
+        return final
     # 去掉声调数字
     final_clean = final.rstrip("0123456789")
     return PINYIN_TO_MOUTH.get(final_clean, "N")  # 默认闭嘴

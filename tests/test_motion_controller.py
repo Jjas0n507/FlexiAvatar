@@ -227,3 +227,88 @@ class TestBackwardCompatibility:
         phonemes = [Phoneme(phoneme="A", start_ms=0, end_ms=100)]
         frames = ctrl.phonemes_to_lip_sync(phonemes)
         assert len(frames) > 0
+
+
+# ── Phase 1.2: 去强制 N 帧 + 智能闭口 ───────────
+
+class TestSmartLipSync:
+    """Phase 1.2: 口型帧生成不再强制每音素后插 N 帧"""
+
+    def test_no_n_for_short_gap(self):
+        """gap < 200ms 不插入闭口 N 帧（除最后一个音素的自动闭口外）"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=80),
+            Phoneme(phoneme="I", start_ms=100, end_ms=180),
+        ]
+        # gap between end of first (80) and start of second (100) = 20ms < 200ms
+        frames = ctrl.phonemes_to_lip_sync(phonemes)
+        mouths = [f["mouth"] for f in frames]
+        # 连续短间隔 → 不应在 A 和 I 之间插入 N
+        # 最后一个 I 后会自动闭口追加 N
+        assert mouths[0] == "A"
+        assert mouths[1] == "I"
+        assert "N" not in mouths[:2], f"No N should appear between short-gap phonemes, got {mouths}"
+
+    def test_n_inserted_for_long_gap(self):
+        """gap > 200ms 插入过渡闭口帧"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=80),
+            Phoneme(phoneme="I", start_ms=400, end_ms=480),
+        ]
+        # gap = 400 - 80 = 320ms > 200ms
+        frames = ctrl.phonemes_to_lip_sync(phonemes)
+        mouths = [f["mouth"] for f in frames]
+        assert "N" in mouths, f"Expected N frame for long gap, got {mouths}"
+
+    def test_last_phoneme_closes(self):
+        """最后一个音素后追加闭口帧"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=80),
+        ]
+        frames = ctrl.phonemes_to_lip_sync(phonemes)
+        mouths = [f["mouth"] for f in frames]
+        assert mouths[0] == "A"
+        assert mouths[-1] == "N", f"Last frame should close mouth, got {mouths}"
+
+    def test_punctuation_forces_close(self):
+        """标点字符 (。！？) 结束时强制闭口"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="E", start_ms=0, end_ms=100, char="。"),
+            Phoneme(phoneme="A", start_ms=150, end_ms=250),
+        ]
+        frames = ctrl.phonemes_to_lip_sync(phonemes)
+        mouths = [f["mouth"] for f in frames]
+        # 第一个 phoneme char 为 。→ 之后应紧跟 N
+        # expected: E, N, A (last close handled separately)
+        assert "N" in mouths[:3], f"Punctuation should force close, got {mouths}"
+
+    def test_single_phoneme_open_then_close(self):
+        """单音素生成开+闭两帧"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="O", start_ms=10, end_ms=200),
+        ]
+        frames = ctrl.phonemes_to_lip_sync(phonemes)
+        mouths = [f["mouth"] for f in frames]
+        assert mouths[0] == "O"
+        assert mouths[-1] == "N"
+        assert len(frames) >= 2
+
+    def test_close_gap_threshold_exactly_200(self):
+        """gap 恰好 200ms 时视情况而定（<= 阈值不插入 N）"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=100),
+            Phoneme(phoneme="I", start_ms=300, end_ms=400),
+        ]
+        # gap = 300 - 100 = 200ms → 不插入 N
+        frames = ctrl.phonemes_to_lip_sync(phonemes)
+        mouths = [f["mouth"] for f in frames]
+        # Should be A, I (no N between since gap is exactly threshold)
+        # Last close frame is expected
+        assert mouths[0] == "A"
+        assert "I" in mouths

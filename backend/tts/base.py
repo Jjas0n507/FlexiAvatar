@@ -16,6 +16,8 @@ class Phoneme:
     phoneme: str              # 音素符号 (A, I, U, E, O, N 或 IPA)
     start_ms: float           # 起始时间 (ms)
     end_ms: float             # 结束时间 (ms)
+    char: str = ""            # 对应的源字符 (Phase 1.1)
+    volume: float = 0.5       # 音量归一化值 [0.0, 1.0] (Phase 1.1)
 
 
 @dataclass
