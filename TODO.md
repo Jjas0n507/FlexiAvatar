@@ -1,7 +1,7 @@
 # TODO — 已完阶段遗留 & 后续优化
 
 > 对照 `DESIGN_AND_PLAN.md` 阶段 1-3，记录未完成项、可选跳过项、优化机会。
-> 标记说明: ❌ 未做 | ⚠️ 部分/可优化 | 📦 属于后续阶段
+> 标记说明: ❌ 未做 | ⚠️ 部分/可优化 | 📦 属于后续阶段 | ✅ 已完成
 
 ---
 
@@ -27,10 +27,7 @@
 
 - **`frontend/src/hooks/useAudioPlayback.ts`** — 计划中的音频播放 hook。当前 TTS 输出通过 WebSocket 发送到前端，但前端没有对应的播放逻辑。
 
-- **ffmpeg** — Edge-TTS 返回 MP3，`pydub` 需要 ffmpeg 转 WAV。当前 Windows 环境未安装，导致 `test_tts.py` 失败。安装方式：
-  ```bash
-  winget install ffmpeg   # 或从 https://ffmpeg.org/download.html 下载
-  ```
+- **ffmpeg** — Edge-TTS 返回 MP3，`pydub` 需要 ffmpeg 转 WAV。当前 Linux 环境已安装。
 
 ### ⚠️ 可优化
 
@@ -62,7 +59,7 @@
 
 - **工具调用实测** — `chat_with_tools()` 代码完整，但仅在单元测试中验证了 `stream_chat()`。真正的 tool-calling 循环要等 Phase 5 工具系统就绪后实测。
 
-- **LLM 后端切换** — 抽象基类 `BaseLLM` 支持多适配器，但 pipeline 中硬编码了 `OpenAIAdapter`（第 68 行）。切换 Ollama 需要改 pipeline 代码，而非仅改配置。
+- **LLM 后端切换** — 抽象基类 `BaseLLM` 支持多适配器，但 pipeline 中硬编码了 `OpenAIAdapter`。切换 Ollama 需要改 pipeline 代码，而非仅改配置。
 
 - **对话历史 token 预算** — 当前按消息数量裁剪（`max_history_messages=20`），计划中还有 `max_context_tokens=4000` 的 token 级预算未实现。对于长对话，消息数限制不等于 token 限制。
 
@@ -75,6 +72,32 @@
 
 ---
 
+## 阶段 4 — Live2D 角色集成 ✅
+
+### ✅ 已完成 (Phase 0-4 动画升级)
+
+- **Live2D 渲染**: `live2d-renderer` + Cubism 3 模型（有马加奈）
+- **ModelProfile 抽象层**: `model_profile.py` + `model_profile.yaml`，前后端共享契约
+- **拼音表统一**: `mouth_shapes.py` — 提取重复表，幂等 pinyin→mouth 映射
+- **MotionController 重构**: 接受 ModelProfile，profile-aware 口型/表情/动作
+- **WebSocket profile 消息**: 后端启动加载 ModelProfile → `live2d.profile` → 前端 Zustand store
+- **前端 profile 驱动**: `Live2DCanvas.tsx` 模型路径/口型值/表情/emoji/空闲 全部从 profile 读取
+- **顺滑口型**: 去强制 N 帧，gap≤200ms 自然插值，标点强闭口，Phoneme.char/volume
+- **RMS 音量驱动**: `backend/audio/prosody.py` 提取音量包络，open_y/form 动态缩放
+- **分段情绪时间线**: `_split_text_to_segments` + `build_timeline_message` 混合时间线
+- **空闲调度器**: `IdleBehaviorScheduler` 眨眼/视线漂移/歪头/表情循环
+- **集成清理**: 统一 `build_timeline_message`，requirements.txt 取消注释
+- **测试**: 76 tests (mouth_shapes 6, model_profile 10, motion_controller 33, phoneme 8, prosody 7, idle_scheduler 12)
+
+### ⚠️ 可优化（前端侧）
+
+- **前端 `timeline` command 处理**: 后端已发 `command: "timeline"` 含 `entries[]`，但 `Live2DCanvas.tsx` 的 switch/case 仍只处理 `lip_sync`/`expression`/`motion`/`interrupt`/`reset`。需新增 `timeline` case，按 `timeMs` 排序调度口型+表情。
+- **TimelineEntry TS 类型**: `types/index.ts` 缺少 `TimelineEntry` 类型定义。
+- **Idle scheduler 前端集成**: 后端 `IdleBehaviorScheduler` 已就绪，但前端 Live2DCanvas 未集成 — 需接收 `idle_start`/`idle_stop` 消息并用 rAF 驱动 `tick(dt)`。
+- **空闲状态 WebSocket 消息**: `main.py` 状态监听中需在进入 IDLE 时发送 `idle_start`，离开时发送 `idle_stop`。
+
+---
+
 ## 跨阶段 — 通用
 
 ### ❌ 缺失
@@ -84,8 +107,6 @@
 - **`backend/tools/builtin/`** — 工具基类和注册中心已就绪，但计划中的 4 个内置工具 (`time_tool`, `weather_tool`, `calculator`, `web_search`) 均未实现。属于 Phase 5。
 
 - **`backend/tools/user_tools/`** — 目录不存在。用户自定义工具的热加载逻辑在 registry 中已实现，但没有目录就无法工作。
-
-- **前端 Live2D 组件** — `Live2DCanvas.tsx`、`Live2DModel.ts`、`LipSyncEngine.ts`、`ExpressionController.ts`、`useLive2D.ts` 均未实现。属于 Phase 4。后端 `motion_controller.py` 已就绪。
 
 - **日志文件输出** — 当前日志仅输出到控制台（`logging.basicConfig`），没有文件持久化。长时间运行调试时需要。
 
@@ -118,17 +139,3 @@
 | WebSocket 心跳 | 低 | 计划要求 10s ping/pong，实际是前端主动 ping。应改为后端主动发 ping 检测断线。 |
 | `.env.example` | 中 | 应为新开发者提供 `.env.example` 模板，列出所有需要的环境变量。 |
 | `config.user.yaml.example` | 低 | 提供一个示例用户配置文件，展示如何覆盖默认值。 |
-
----
-
-## 下一步：Phase 4 (Live2D)
-
-Phase 4 尚未开工，以下是从计划中提取的高层任务：
-
-1. 前端集成 Cubism SDK + 加载模型
-2. 口型同步引擎（接收 `motion_controller.py` 的音素帧）
-3. 表情系统（neutral/happy/thinking/surprised/sad）
-4. 身体动作（呼吸、眨眼、状态触发动作）
-5. 交互优化（点击触发、视线追踪）
-
-> 参见 `DESIGN_AND_PLAN.md` 第 1543-1624 行获取完整计划。

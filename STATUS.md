@@ -1,57 +1,72 @@
 # 当前开发状态
 
 > ⚠️ 此文件记录**动态**信息，每次切换工作内容时更新。
-> 最后更新：2026-07-05
+> 最后更新：2026-07-16
 
 ## 当前位置
 
-- **分支**: `phase4-live2d`（从 `phase3-streaming-pipeline` 切出）
-- **阶段**: Phase 4 — Live2D 角色集成（基本完成）
-- **进度**: 全链路已验证通过，Live2D 自主运动已实现
+- **分支**: `master`
+- **阶段**: Phase 4 完成 → 全部 4 阶段已完成
+- **进度**: 全链路已验证通过，Live2D 动画系统全面升级完成（76 tests passing）
 
 ## 最近提交
 
 ```
-056bae2 docs: simplify CLAUDE.md for team sharing, add STATUS.md/NEXT.md for dynamic progress tracking
-35f1179 docs: add TODO.md tracking gaps across Phases 1-3
-02f2797 fix(config): load .env from project root, read OPENAI_API_KEY/BASE_URL from env
-b9f4e6f feat(tts): add streaming synthesis (sentence-by-sentence)
-a3987ea feat(asr): add streaming transcription support
+a6e8555 feat: Phase 4 集成清理 — unified build_timeline_message, requirements.txt 取消注释, progress memory 更新
+f073cf8 feat: Phase 3 空闲行为调度器 — IdleBehaviorScheduler (眨眼/视线漂移/歪头/表情循环)
+1b7761f feat: Phase 2 分段情绪时间线 — _split_text_to_segments, build_timeline_message 含口型+表情混合时间线
+5a830e7 feat: Phase 1 顺滑口型+韵律 — Phoneme.char/volume, 去强制N帧, prosody.py RMS, 音量驱动口型缩放
+84cf542 feat: Phase 0.7 frontend + 0.8 — ModelProfile WS message,前端从 profile 读取所有硬编码值
 ```
 
-## Phase 4 已完成
+## Live2D 动画升级 — 全部完成 ✅
+
+参考计划: `docs/live2d-animation-upgrade-plan.md`
+
+| Phase | 内容 | 测试数 | 状态 |
+|-------|------|--------|------|
+| 0 | 模型解耦 (mouth_shapes, ModelProfile, MotionController 重构, 前端 profile 驱动) | 34 | ✅ |
+| 1 | 顺滑口型+韵律 (char/volume, 智能闭口, RMS 音量, 缩放) | +21 | ✅ |
+| 2 | 分段情绪时间线 (build_timeline_message 混合口型+表情) | +9 | ✅ |
+| 3 | 空闲调度器 (IdleBehaviorScheduler: 眨眼/视线/歪头/表情循环) | +12 | ✅ |
+| 4 | 集成清理 (统一 timeline, requirements.txt) | — | ✅ |
+
+### 关键成果
+
+1. **ModelProfile 契约层**: YAML 驱动模型配置，前后端共享同一份数据，换模型只需新 YAML
+2. **智能口型同步**: 去强制 N 帧，短 gap 自然插值，标点强制闭口，RMS 音量驱动缩放
+3. **分段情绪**: 文本按标点切分独立检测情绪，混合口型+表情 time-sorted timeline
+4. **空闲调度器**: tick(dt) 驱动眨眼/视线漂移/歪头/表情循环，后端生成指令
+5. **向后兼容**: 所有新代码保留 hardcoded fallback (profile=None)
+
+### 新增文件 (7)
+
+```
+backend/live2d/mouth_shapes.py, model_profile.py, idle_scheduler.py
+backend/audio/__init__.py, prosody.py
+tests/test_phoneme.py, test_prosody.py, test_idle_scheduler.py
+```
+
+## Phase 4 已完成（基础 Live2D 集成）
 
 1. **Live2D 渲染**: 使用 `live2d-renderer` (npm) 加载 Cubism 3 模型（有马加奈）
-2. **模型集成**: `resources/有马加奈` → `frontend/public/live2d/有马加奈/`
-3. **口型同步**: 后端 `MotionController` 生成帧 → WebSocket → 前端 `setTimeout` 驱动 `ParamMouthOpenY` + `ParamMouthForm`
-4. **表情系统**: 状态驱动（processing → thinking, interrupted → surprised）+ 空闲自主切换（5-12s 间隔）
-5. **动作系统**: `live2d-renderer` 内置 `MotionController` 自动循环 `randomMotion`，`Idle` 优先级
-6. **自动动画**: 呼吸、眨眼、物理模拟由 Cubism SDK 自动处理
-7. **自主运动**: 关闭鼠标跟随（`autoInteraction: false`），靠内置 motion 循环 + 自主表情定时器实现
-8. **语音全链路**: 文本→LLM(DeepSeek)→TTS(Edge-TTS)→Live2D 口型 + 音频播放，端到端验证通过
-9. **麦克风采集**: `useMicCapture` hook，16000Hz/单声道/512 sample frames
-
-## Phase 4 期间修复的 Bug
-
-| 问题 | 根因 | 修复 |
-|------|------|------|
-| 状态变更不广播 | `on_transition` 只记日志 | 加入 `broadcast_state()` 调用 (`main.py:60`) |
-| 前端 WS 不响应 | `wsClient.isConnected` 是非 reactive getter | 改为 Zustand store 订阅 (`useWebSocket.ts:129`) |
-| Live2D CubismCore 不加载 | CDN WASM 404 + Emscripten 异步初始化 | 本地部署 JS + 100×100ms 轮询 (`Live2DCanvas.tsx:31-49`) |
-| TTS 异常导致状态卡死 | `NoAudioReceived` 异常未捕获 | try/except 包裹 TTS 循环，单句失败跳过 (`main.py:228-241`) |
-| ffmpeg 缺失 | 系统未安装 | conda install 到 ai-agent env |
+2. **口型同步**: 后端 `MotionController` 生成帧 → WebSocket → 前端驱动口型参数
+3. **表情系统**: 状态驱动 + 文本情绪检测 + 空闲自主切换
+4. **动作系统**: `randomMotion: true` + profile 驱动的 motion group 选择
+5. **自动动画**: 呼吸、眨眼、物理模拟由 Cubism SDK 自动处理
+6. **语音全链路**: 文本→LLM→TTS→Live2D 口型 + 音频播放，端到端验证通过
 
 ## 架构决策
 
 1. 使用 `live2d-renderer` (Moebytes) 而非手动集成 Cubism SDK — 减少 80% 样板代码
-2. 此模型使用 `ParamMouthOpenY` + `ParamMouthForm` 组合口型参数，而非标准 A/I/U/E/O 独立参数
-3. Cubism Core WASM 从本地 `public/live2d/` 加载（JS 内含 asm.js fallback）
-4. `live2d.control` WebSocket 消息格式：后端 snake_case (`lip_sync`)，前端 TS 类型已对齐
-5. 自主运动方案：`randomMotion: true` + `enableMotion: true` 利用 live2d-renderer 内置循环，加前端定时器切换表情
+2. ModelProfile 抽象层 — 模型参数 ID/口型值/表情/动作全部 YAML 配置
+3. MotionController 单例注入 AudioPipeline — 消除双实例
+4. 口型同步使用 setTimeout 方案（50ms 偏差无感知），后续可选 AudioContext 升级
+5. 自主运动: `randomMotion: true` + `enableMotion: true` + idle scheduler 指令
 
 ## 已知问题（高优先级）
 
-1. **延迟极高**: 用户输入到回复延迟大。首轮 ASR 模型（Whisper base）加载需 ~50s，后续回合 ~10s。Edge-TTS 网络延迟不稳定。
-2. **口型与语音不同步**: 口型用 `setTimeout` 帧序列播放，未与 `AudioContext.currentTime` 同步，视觉上口型与听到的声音有偏差。
+1. **延迟极高**: ASR Whisper base 模型加载 ~50s，后续 ~10s。Edge-TTS 网络延迟不稳定。
+2. **口型与语音不同步**: 口型用 `setTimeout` 帧序列播放，未与 `AudioContext.currentTime` 同步。
 
 详见 `TODO.md`。
