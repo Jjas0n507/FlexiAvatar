@@ -15,6 +15,7 @@ import type {
   SessionState,
   ToolProgressPayload,
   Live2DControlPayload,
+  ModelProfile,
 } from "../types";
 
 export interface ChatMessage {
@@ -56,6 +57,10 @@ export interface AgentState {
   // Live2D
   live2dControl: Live2DControlPayload | null;
   setLive2DControl: (control: Live2DControlPayload | null) => void;
+
+  // ModelProfile (从后端 live2d.profile 消息接收)
+  modelProfile: ModelProfile | null;
+  setModelProfile: (profile: ModelProfile) => void;
 
   // 错误
   lastError: string | null;
@@ -139,6 +144,10 @@ export const useAgentStore = create<AgentState>()(
   // Live2D
   live2dControl: null,
   setLive2DControl: (control) => set({ live2dControl: control }),
+
+  // ModelProfile
+  modelProfile: null,
+  setModelProfile: (profile) => set({ modelProfile: profile }),
 
   // 错误
   lastError: null,

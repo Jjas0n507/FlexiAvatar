@@ -11,7 +11,7 @@
 import React, { useRef, useEffect, useCallback, useState } from "react";
 import { Live2DCubismModel } from "live2d-renderer";
 import { useAgentStore } from "../stores/agent-store";
-import type { Live2DControlPayload, LipSyncFrame } from "../types";
+import type { Live2DControlPayload, LipSyncFrame, ModelProfile } from "../types";
 
 // MotionPriority enum 值 (live2d-renderer 导出为 type，运行时用数值)
 const MotionPriority = {
@@ -22,9 +22,35 @@ const MotionPriority = {
 } as const;
 
 // ── 配置 ────────────────────────────────────────
-const MODEL_PATH = "/live2d/有马加奈/有马加奈.model3.json";
 // ponytail: CDN WASM 404s, use local copy. JS contains wasm asm.js fallback.
 const CUBISM_CORE_PATH = "/live2d/live2dcubismcore.min.js";
+
+// 默认硬编码值（profile 为 null 时的 fallback）
+const FALLBACK_MODEL_PATH = "/live2d/有马加奈/有马加奈.model3.json";
+const FALLBACK_LIP_OPEN_Y = "ParamMouthOpenY";
+const FALLBACK_LIP_FORM = "ParamMouthForm";
+const FALLBACK_MOUTH_SHAPES: Record<string, { openY: number; form: number }> = {
+  A: { openY: 0.8, form: 0.2 },
+  I: { openY: 0.3, form: 0.8 },
+  U: { openY: 0.3, form: -0.5 },
+  E: { openY: 0.5, form: 0.4 },
+  O: { openY: 0.6, form: -0.4 },
+  N: { openY: 0.0, form: 0.0 },
+};
+const FALLBACK_EMOJI_PARAMS = ["Paramemoji1", "Paramemoji2", "Paramemoji6", "Paramemoji7"];
+const FALLBACK_IDLE_EXPRESSIONS = ["neutral", "happy", "thinking", "surprised"];
+
+/** 从 profile 获取模型路径，不存在时 fallback */
+function getModelPath(profile: ModelProfile | null): string {
+  if (profile) {
+    // model3_path 是相对于模型目录的，拼接完整路径
+    const dir = profile.model3_path.includes("/")
+      ? profile.model3_path.replace(/[^/]+$/, "")
+      : "/live2d/有马加奈/";
+    return dir + (profile.model3_path.split("/").pop() ?? "有马加奈.model3.json");
+  }
+  return FALLBACK_MODEL_PATH;
+}
 
 // ponytail: live2d-renderer 的 loadCubismCore 只等 script.onload，
 // 但 Emscripten WASM 初始化是异步的。需要对 Live2DCubismCore 做轮询。
@@ -48,15 +74,26 @@ async function ensureCubismCoreLoaded(src: string): Promise<void> {
   throw new Error("Live2DCubismCore not defined after 10s");
 }
 
-// 口型 → ParamMouthOpenY + ParamMouthForm 映射
-const MOUTH_SHAPES: Record<string, { openY: number; form: number }> = {
-  A: { openY: 0.8, form: 0.2 },
-  I: { openY: 0.3, form: 0.8 },
-  U: { openY: 0.3, form: -0.5 },
-  E: { openY: 0.5, form: 0.4 },
-  O: { openY: 0.6, form: -0.4 },
-  N: { openY: 0.0, form: 0.0 },
-};
+// ── 辅助：从 profile 获取口型参数 ──────────────────
+
+function getMouthShape(
+  mouth: string,
+  profile: ModelProfile | null
+): { openY: number; form: number } {
+  if (profile?.mouth_shapes?.[mouth]) {
+    const s = profile.mouth_shapes[mouth];
+    return { openY: s.open_y, form: s.form };
+  }
+  return FALLBACK_MOUTH_SHAPES[mouth] ?? FALLBACK_MOUTH_SHAPES.N;
+}
+
+function getMouthParams(profile: ModelProfile | null) {
+  return {
+    openY: profile?.parameters?.lip_sync?.open_y ?? FALLBACK_LIP_OPEN_Y,
+    form: profile?.parameters?.lip_sync?.form ?? FALLBACK_LIP_FORM,
+    extra: profile?.parameters?.extra ?? FALLBACK_EMOJI_PARAMS,
+  };
+}
 
 // ponytail: live2d-renderer 的 setParameter 运行时可用但 .d.ts 未完整声明
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -67,12 +104,14 @@ type ModelWithSetParam = Live2DCubismModel & {
 function setMouthParams(
   model: Live2DCubismModel | null,
   openY: number,
-  form: number
+  form: number,
+  paramOpenY: string = FALLBACK_LIP_OPEN_Y,
+  paramForm: string = FALLBACK_LIP_FORM,
 ) {
   if (!model?.loaded) return;
   const m = model as unknown as ModelWithSetParam;
-  m.setParameter("ParamMouthOpenY", openY);
-  m.setParameter("ParamMouthForm", form);
+  m.setParameter(paramOpenY, openY);
+  m.setParameter(paramForm, form);
 }
 
 // ── 辅助：获取可用动作组名 ──────────────────────
@@ -103,6 +142,26 @@ const Live2DCanvas: React.FC = () => {
 
   // 缓存可用的动作组名
   const motionGroupsRef = useRef<string[]>([]);
+
+  // ModelProfile（从后端 live2d.profile 消息接收，null 时 fallback 硬编码）
+  const profileRef = useRef<ModelProfile | null>(null);
+
+  // 订阅 profile 更新
+  useEffect(() => {
+    const unsub = useAgentStore.subscribe(
+      (state) => state.modelProfile,
+      (profile) => {
+        if (profile) {
+          profileRef.current = profile;
+          console.log("[Live2D] Profile updated:", profile.name);
+        }
+      }
+    );
+    // 初始化时也读取一次
+    const initial = useAgentStore.getState().modelProfile;
+    if (initial) profileRef.current = initial;
+    return unsub;
+  }, []);
 
   // ponytail: 自主表情/动作定时器
   const autoBehaviorTimerRef = useRef<ReturnType<typeof setInterval>>();
@@ -137,9 +196,10 @@ const Live2DCanvas: React.FC = () => {
         });
 
         // 加载模型
-        console.log("[Live2D] Loading model...");
-        await model.load(MODEL_PATH);
-        console.log("[Live2D] Model loaded:", MODEL_PATH);
+        const modelPath = getModelPath(profileRef.current);
+        console.log("[Live2D] Loading model...", modelPath);
+        await model.load(modelPath);
+        console.log("[Live2D] Model loaded:", modelPath);
 
         if (destroyed) {
           model.destroy();
@@ -218,6 +278,9 @@ const Live2DCanvas: React.FC = () => {
     lipSyncTimerRef.current.forEach(clearTimeout);
     lipSyncTimerRef.current = [];
 
+    const profile = profileRef.current;
+    const mouthParams = getMouthParams(profile);
+
     for (let i = 0; i < frames.length; i++) {
       const frame = frames[i];
       const delay = Math.max(0, frame.timeMs);
@@ -226,12 +289,23 @@ const Live2DCanvas: React.FC = () => {
       const nextDelay = nextFrame ? nextFrame.timeMs - frame.timeMs : 100;
 
       const timer = setTimeout(() => {
-        const shape = MOUTH_SHAPES[frame.mouth] ?? MOUTH_SHAPES.N;
-        setMouthParams(modelRef.current, shape.openY, shape.form);
+        // Phase 1.5: 优先使用 frame.params（后端计算的具体参数值）
+        if (frame.params && Object.keys(frame.params).length > 0) {
+          const m = modelRef.current as unknown as ModelWithSetParam | null;
+          if (m?.loaded) {
+            for (const [key, value] of Object.entries(frame.params)) {
+              m.setParameter(key, value);
+            }
+          }
+        } else {
+          // Fallback: 口型查表
+          const shape = getMouthShape(frame.mouth, profile);
+          setMouthParams(modelRef.current, shape.openY, shape.form, mouthParams.openY, mouthParams.form);
+        }
 
         if (nextFrame && nextFrame.mouth !== "N") {
           const closeTimer = setTimeout(() => {
-            setMouthParams(modelRef.current, 0, 0);
+            setMouthParams(modelRef.current, 0, 0, mouthParams.openY, mouthParams.form);
           }, nextDelay * 0.7);
           lipSyncTimerRef.current.push(closeTimer);
         }
@@ -253,33 +327,56 @@ const Live2DCanvas: React.FC = () => {
     []
   );
 
-  // ── 表情切换（此模型无内置 .exp3.json 引用，降级为参数直设）──
+  // ── 表情切换（优先使用 profile，无 profile 时 fallback 硬编码）──
 
   const setExpression = useCallback((name: string) => {
     const model = modelRef.current;
     if (!model?.loaded) return;
 
-    // 尝试标准表情
-    const expressions = model.getExpressions();
-    if (expressions.length > 0 && expressions.includes(name)) {
-      model.setExpression(name);
-      return;
+    const profile = profileRef.current;
+    const exprDef = profile?.expressions?.[name];
+
+    if (exprDef) {
+      if (exprDef.type === "native" && exprDef.name) {
+        // 原生 .exp3.json 表情
+        const available = model.getExpressions();
+        if (available.includes(exprDef.name)) {
+          model.setExpression(exprDef.name);
+          return;
+        }
+        // 原生表情不可用时降级到 params
+      }
+      if (exprDef.type === "params" && exprDef.params) {
+        // 参数直设：先重置 extra 参数
+        const m = model as unknown as ModelWithSetParam;
+        const extraParams = profile?.parameters?.extra ?? FALLBACK_EMOJI_PARAMS;
+        for (const p of extraParams) {
+          m.setParameter(p, 0);
+        }
+        // 设置表情参数
+        for (const [key, value] of Object.entries(exprDef.params)) {
+          m.setParameter(key, value);
+        }
+        return;
+      }
+      // type=native 但 name=null → neutral，只重置 extra
+      if (exprDef.type === "native" && !exprDef.name) {
+        const m = model as unknown as ModelWithSetParam;
+        const extraParams = profile?.parameters?.extra ?? FALLBACK_EMOJI_PARAMS;
+        for (const p of extraParams) {
+          m.setParameter(p, 0);
+        }
+        return;
+      }
     }
 
-    // 降级：直接用参数控制表情
+    // ── Fallback: 硬编码表情逻辑（profile 为 null 或表情未定义时）──
     const m = model as unknown as ModelWithSetParam;
-    // 先重置表情相关参数
-    const emojiParams = [
-      "Paramemoji1", // 空洞眼
-      "Paramemoji2", // 害羞
-      "Paramemoji6", // 繁星眼
-      "Paramemoji7", // 哭泣
-    ];
+    const emojiParams = FALLBACK_EMOJI_PARAMS;
     for (const p of emojiParams) {
       m.setParameter(p, 0);
     }
 
-    // 根据名称设置对应参数
     switch (name) {
       case "surprised":
         m.setParameter("ParamEyeLOpen", 1.2);
@@ -307,17 +404,17 @@ const Live2DCanvas: React.FC = () => {
 
   // ── 自主行为定时器 ────────────────────────────
 
-  // 空闲时可用表情列表（参数方式）
-  const IDLE_EXPRESSIONS = ["neutral", "happy", "thinking", "surprised"];
-
   useEffect(() => {
     if (loadState !== "loaded") return;
 
     const scheduleNext = () => {
-      // ponytail: 5-12 秒随机间隔切换表情
-      const delay = 5000 + Math.random() * 7000;
+      const profile = profileRef.current;
+      const idleExprs = profile?.idle?.expression_cycle ?? FALLBACK_IDLE_EXPRESSIONS;
+      const [minInterval, maxInterval] = profile?.idle?.expression_interval ?? [5.0, 12.0];
+      // ponytail: 使用 profile 的空闲间隔或默认 5-12 秒
+      const delay = (minInterval + Math.random() * (maxInterval - minInterval)) * 1000;
       autoBehaviorTimerRef.current = setTimeout(() => {
-        const expr = IDLE_EXPRESSIONS[Math.floor(Math.random() * IDLE_EXPRESSIONS.length)];
+        const expr = idleExprs[Math.floor(Math.random() * idleExprs.length)];
         setExpression(expr);
         scheduleNext();
       }, delay);
@@ -365,12 +462,18 @@ const Live2DCanvas: React.FC = () => {
           case "interrupt":
             modelRef.current?.stopMotions();
             setExpression("surprised");
-            setMouthParams(modelRef.current, 0, 0);
+            {
+              const mp = getMouthParams(profileRef.current);
+              setMouthParams(modelRef.current, 0, 0, mp.openY, mp.form);
+            }
             break;
 
           case "reset":
             modelRef.current?.stopMotions();
-            setMouthParams(modelRef.current, 0, 0);
+            {
+              const mp = getMouthParams(profileRef.current);
+              setMouthParams(modelRef.current, 0, 0, mp.openY, mp.form);
+            }
             // 恢复到待机动作
             if (motionGroupsRef.current.length > 0) {
               modelRef.current?.startRandomMotion(null, MotionPriority.Idle);

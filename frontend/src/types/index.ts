@@ -97,6 +97,83 @@ export interface ErrorPayload {
 }
 
 // ── 应用配置 ────────────────────────────────
+// ── ModelProfile (后端 live2d.profile 消息) ─────
+
+export interface ModelProfileLipSync {
+  open_y: string;
+  form: string;
+}
+
+export interface ModelProfileEyes {
+  left_open: string;
+  right_open: string;
+  left_smile: string;
+  right_smile: string;
+  eyeball_x: string;
+  eyeball_y: string;
+}
+
+export interface ModelProfileBrows {
+  left_y: string;
+  right_y: string;
+  left_x: string;
+  right_x: string;
+}
+
+export interface ModelProfileHead {
+  angle_z: string;
+}
+
+export interface ModelProfileBody {
+  angle_x: string;
+}
+
+export interface ModelProfileParameters {
+  lip_sync: ModelProfileLipSync;
+  eyes: ModelProfileEyes;
+  brows: ModelProfileBrows;
+  head: ModelProfileHead;
+  body: ModelProfileBody;
+  extra: string[];
+}
+
+export interface MouthShapeValue {
+  open_y: number;
+  form: number;
+}
+
+export interface ModelProfileExpression {
+  type: "native" | "params";
+  name?: string | null;
+  params?: Record<string, number>;
+}
+
+export interface ModelProfileMotion {
+  group: string;
+  index: number;
+}
+
+export interface ModelProfileIdle {
+  expression_cycle: string[];
+  expression_interval: [number, number];
+  blink_interval: [number, number];
+  eye_drift_range: number;
+  head_tilt_chance: number;
+  head_tilt_angle: number;
+}
+
+export interface ModelProfile {
+  name: string;
+  model3_path: string;
+  scale: number;
+  parameters: ModelProfileParameters;
+  mouth_shapes: Record<string, MouthShapeValue>;
+  expressions: Record<string, ModelProfileExpression>;
+  motions: Record<string, ModelProfileMotion[]>;
+  idle: ModelProfileIdle;
+}
+
+// ── 应用配置 ────────────────────────────────
 export interface AppConfig {
   asr: {
     engine: string;

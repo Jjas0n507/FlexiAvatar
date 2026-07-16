@@ -8,7 +8,7 @@
 import { useEffect, useCallback } from "react";
 import { wsClient } from "../services/ws-client";
 import { useAgentStore } from "../stores/agent-store";
-import type { WSMessage, SessionState } from "../types";
+import type { WSMessage, SessionState, ModelProfile } from "../types";
 
 export function useWebSocket() {
   const {
@@ -19,6 +19,7 @@ export function useWebSocket() {
     setCurrentASRText,
     updateToolProgress,
     setLive2DControl,
+    setModelProfile,
     setLastError,
     setAvailableTools,
   } = useAgentStore();
@@ -90,6 +91,15 @@ export function useWebSocket() {
     unsubs.push(
       wsClient.on("live2d.control", (msg: WSMessage) => {
         setLive2DControl(msg.payload as unknown as Parameters<typeof setLive2DControl>[0]);
+      })
+    );
+
+    // Live2D ModelProfile (后端连接后发送)
+    unsubs.push(
+      wsClient.on("live2d.profile", (msg: WSMessage) => {
+        const profile = msg.payload as unknown as ModelProfile;
+        setModelProfile(profile);
+        console.log("[WS] ModelProfile received:", profile.name);
       })
     );
 
