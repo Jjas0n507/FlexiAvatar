@@ -40,6 +40,7 @@ class AudioPipeline:
     def __init__(
         self,
         session_manager: SessionManager,
+        motion_controller: MotionController | None = None,
         on_tts_audio: Callable[[TTSResult], Awaitable[None]] | None = None,
         on_live2d_control: Callable[[dict], Awaitable[None]] | None = None,
         on_asr_result: Callable[[str, bool], Awaitable[None]] | None = None,
@@ -56,7 +57,7 @@ class AudioPipeline:
         self._asr = None       # type: BaseASR | None
         self._llm = None       # type: BaseLLM | None
         self._tts = None       # type: BaseTTS | None
-        self._motion: MotionController | None = None
+        self._motion = motion_controller  # 外部注入，消除双实例
 
         # 对话历史 (保留上下文)
         self._history: list[Message] = []
@@ -75,7 +76,8 @@ class AudioPipeline:
             self._asr = create_asr(config)
             self._llm = create_llm(config)
             self._tts = create_tts(config)
-            self._motion = MotionController()
+            if self._motion is None:
+                self._motion = MotionController()  # fallback: 无外部注入时自建
 
             # 初始化对话历史
             system_prompt = config.get("llm.system_prompt", "")

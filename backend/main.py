@@ -44,7 +44,23 @@ config.load()
 # 初始化核心组件
 session_manager = SessionManager()
 tool_registry = ToolRegistry()
-motion_controller = MotionController()
+
+# Phase 0.6: 加载 ModelProfile
+try:
+    from backend.live2d.model_profile import ModelProfile
+    model_dir = config.get("live2d.model_dir", "")
+    if model_dir:
+        model_profile = ModelProfile.load(model_dir)
+        motion_controller = MotionController(profile=model_profile)
+        logger.info(f"ModelProfile loaded: {model_profile.name}")
+    else:
+        model_profile = None
+        motion_controller = MotionController()
+        logger.warning("No live2d.model_dir configured, using hardcoded fallback")
+except Exception as e:
+    logger.error(f"Failed to load ModelProfile: {e}")
+    model_profile = None
+    motion_controller = MotionController()
 
 # 加载工具
 tool_count = tool_registry.load_all()
@@ -113,6 +129,7 @@ async def _get_or_create_pipeline(client_id: str, websocket: WebSocket) -> Audio
     if client_id not in client_pipelines:
         pipeline = AudioPipeline(
             session_manager=session_manager,
+            motion_controller=motion_controller,
             on_tts_audio=lambda result: _send_tts(client_id, result),
             on_live2d_control=lambda msg: send_to(client_id, {
                 "type": "live2d.control",
