@@ -21,23 +21,9 @@ import wave
 import edge_tts
 
 from backend.tts.base import BaseTTS, TTSResult, Phoneme
+from backend.live2d.mouth_shapes import pinyin_final_to_mouth
 
 logger = logging.getLogger("tts")
-
-# 中文拼音韵母 → 五口型映射
-_PINYIN_TO_MOUTH: dict[str, str] = {
-    "a": "A", "ai": "A", "an": "A", "ang": "A", "ao": "A",
-    "ia": "A", "ian": "A", "iang": "A", "iao": "A",
-    "ua": "A", "uai": "A", "uan": "A", "uang": "A",
-    "e": "E", "ei": "E", "en": "E", "eng": "E", "er": "E",
-    "ie": "E", "ue": "E",
-    "i": "I", "in": "I", "ing": "I",
-    "o": "O", "ou": "O", "ong": "O",
-    "io": "O", "iong": "O",
-    "u": "U", "un": "U",
-    "iu": "U", "ui": "U", "uo": "U",
-    "ü": "U", "üe": "U", "üan": "U", "ün": "U",
-}
 
 _ZH_VOICES = [
     {"id": "zh-CN-XiaoxiaoNeural", "name": "晓晓 (女)", "language": "zh-CN"},
@@ -212,8 +198,7 @@ class EdgeTTSAdapter(BaseTTS):
             if py_list and py_list[0]:
                 final = py_list[0][0]
                 if final:
-                    final_clean = final.rstrip("0123456789")
-                    return _PINYIN_TO_MOUTH.get(final_clean, "E")
+                    return pinyin_final_to_mouth(final)
         except ImportError:
             pass
 
