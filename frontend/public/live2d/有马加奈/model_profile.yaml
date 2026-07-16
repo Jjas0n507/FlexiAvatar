@@ -1,0 +1,100 @@
+# Live2D 模型抽象描述 — 前后端共同遵守的契约
+# 有马加奈 (Arima Kana)
+
+model:
+  name: "有马加奈"
+  model3_path: "有马加奈.model3.json"
+  scale: 1.2
+
+# —— 参数映射：逻辑名 → 此模型实际的 Cubism Parameter ID ——
+parameters:
+  # 口型（模型 LipSync group 的实际参数）
+  lip_sync:
+    open_y: "ParamMouthOpenY"   # 纵向张开
+    form: "ParamMouthForm"      # 横向宽度
+
+  # 眼部
+  eyes:
+    left_open: "ParamEyeLOpen"
+    right_open: "ParamEyeROpen"
+    left_smile: "ParamEyeLSmile"
+    right_smile: "ParamEyeRSmile"
+    eyeball_x: "ParamEyeBallX"
+    eyeball_y: "ParamEyeBallY"
+
+  # 眉毛
+  brows:
+    left_y: "ParamBrowLY"
+    right_y: "ParamBrowRY"
+    left_x: "ParamBrowLX"
+    right_x: "ParamBrowRX"
+
+  # 头部/身体
+  head:
+    angle_z: "ParamHeadAngleZ"
+  body:
+    angle_x: "ParamBodyAngleX"
+
+  # 额外参数（模型特有的 emoji 等，表情 fallback 时需要重置）
+  extra: ["Paramemoji1", "Paramemoji2", "Paramemoji3", "Paramemoji4", "Paramemoji5", "Paramemoji6", "Paramemoji7"]
+
+# —— 口型映射：A/I/U/E/O/N → 具体参数值 ——
+mouth_shapes:
+  A: { open_y: 0.8, form: 0.0 }
+  I: { open_y: 0.3, form: 0.8 }
+  U: { open_y: 0.3, form: -0.5 }
+  E: { open_y: 0.5, form: 0.0 }
+  O: { open_y: 0.6, form: -0.2 }
+  N: { open_y: 0.0, form: 0.0 }
+
+# —— 表情映射：逻辑情绪 → 模型实现 ——
+expressions:
+  neutral:
+    type: "native"
+    name: null            # null = 不做任何操作
+
+  happy:
+    type: "native"
+    name: "害羞"          # 模型内置 .exp3.json: 害羞.exp3.json
+
+  sad:
+    type: "native"
+    name: "哭泣"          # 模型内置 .exp3.json: 哭泣.exp3.json
+
+  surprised:
+    type: "params"
+    params:
+      ParamEyeLOpen: 1.2
+      ParamEyeROpen: 1.2
+      ParamBrowLY: 0.5
+      ParamBrowRY: 0.5
+
+  thinking:
+    type: "params"
+    params:
+      ParamBrowLX: -0.2
+      ParamBrowRX: 0.2
+
+# —— 动作映射：逻辑动作 → (Motion Group, Index) ——
+# 模型实际只有 Idle 和 Random 两个 motion group
+motions:
+  listening:
+    - { group: "Idle", index: 0 }
+    - { group: "Idle", index: 1 }
+
+  processing:
+    - { group: "Idle", index: 1 }
+
+  idle:
+    - { group: "Idle", index: 0 }
+    - { group: "Idle", index: 1 }
+    - { group: "Random", index: 0 }
+
+# —— 空闲行为 ——
+idle:
+  expression_cycle: ["neutral", "happy", "thinking"]
+  expression_interval: [5.0, 12.0]   # 秒
+  blink_interval: [2.0, 6.0]         # 秒
+  eye_drift_range: 0.15
+  head_tilt_chance: 0.15
+  head_tilt_angle: 0.1
