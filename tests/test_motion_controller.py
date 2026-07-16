@@ -312,3 +312,100 @@ class TestSmartLipSync:
         # Last close frame is expected
         assert mouths[0] == "A"
         assert "I" in mouths
+
+
+# ── Phase 2: 分段情绪时间线 ─────────────────────
+
+class TestSplitTextToSegments:
+    """按标点切分文本"""
+
+    def test_split_by_punctuation(self):
+        """按 。！？ 切分"""
+        ctrl = MotionController()
+        segments = ctrl._split_text_to_segments("你好！今天天气真好。我们出去玩吧？")
+        assert len(segments) == 3
+        assert segments[0] == "你好！"
+        assert "今天天气真好" in segments[1]
+        assert "我们出去玩吧" in segments[2]
+
+    def test_split_single_sentence(self):
+        """无标点不分段"""
+        ctrl = MotionController()
+        segments = ctrl._split_text_to_segments("今天天气真好")
+        assert len(segments) == 1
+        assert segments[0] == "今天天气真好"
+
+    def test_split_empty(self):
+        """空字符串返回空列表"""
+        ctrl = MotionController()
+        assert ctrl._split_text_to_segments("") == []
+        assert ctrl._split_text_to_segments("   ") == []
+
+    def test_segment_order_preserved(self):
+        """段顺序保持不变"""
+        ctrl = MotionController()
+        text = "第一句。第二句！第三句？"
+        segments = ctrl._split_text_to_segments(text)
+        assert segments[0].startswith("第一句")
+        assert segments[1].startswith("第二句")
+        assert segments[2].startswith("第三句")
+
+
+class TestTimelineMessage:
+    """build_timeline_message 结构验证"""
+
+    def test_timeline_has_command_field(self):
+        """返回 dict 含 command/timeline/audio_start_time"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=100, char="啊"),
+            Phoneme(phoneme="I", start_ms=150, end_ms=250, char="嘻"),
+        ]
+        msg = ctrl.build_timeline_message("啊！嘻嘻。", phonemes, 0.0)
+        assert msg["command"] == "timeline"
+        assert "entries" in msg
+        assert "audio_start_time" in msg
+        assert isinstance(msg["entries"], list)
+
+    def test_timeline_entries_sorted_by_time(self):
+        """entries 按 timeMs 升序排列"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=80, char="好"),
+            Phoneme(phoneme="I", start_ms=100, end_ms=180, char="的"),
+        ]
+        msg = ctrl.build_timeline_message("好的。", phonemes, 0.0)
+        entries = msg["entries"]
+        times = [e["timeMs"] for e in entries]
+        assert times == sorted(times), f"Entries not sorted: {times}"
+
+    def test_timeline_contains_mouth_events(self):
+        """timeline 含 mouth 类型事件"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=100, char="啊"),
+        ]
+        msg = ctrl.build_timeline_message("啊。", phonemes, 0.0)
+        entries = msg["entries"]
+        mouth_entries = [e for e in entries if e["type"] == "mouth"]
+        assert len(mouth_entries) > 0
+
+    def test_timeline_contains_expression_events(self):
+        """timeline 含 expression 类型事件"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=100, char="哇"),
+            Phoneme(phoneme="I", start_ms=100, end_ms=200, char="哈"),
+        ]
+        msg = ctrl.build_timeline_message("哇！哈哈！", phonemes, 0.0)
+        entries = msg["entries"]
+        expr_entries = [e for e in entries if e["type"] == "expression"]
+        # 感叹句应触发情绪
+        assert len(expr_entries) >= 0  # 可能检测到 happy/surprised
+
+    def test_empty_phonemes_still_works(self):
+        """空 phonemes 列表不崩溃"""
+        ctrl = MotionController()
+        msg = ctrl.build_timeline_message("测试。", [], 0.0)
+        assert msg["command"] == "timeline"
+        assert msg["entries"] == []

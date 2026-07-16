@@ -319,6 +319,131 @@ class MotionController:
             "idle_enabled": False,  # 暂停空闲动画
         }
 
+    # ── 分段情绪时间线 (Phase 2) ─────────────────
+
+    @staticmethod
+    def _split_text_to_segments(text: str) -> list[str]:
+        """
+        Phase 2.1: 按标点切分文本为情绪段。
+
+        保留标点在片段末尾。
+        """
+        import re
+        if not text or not text.strip():
+            return []
+        # 在句末标点处切分，保留标点
+        parts = re.split(r"(?<=[。！？!?\n])", text.strip())
+        return [p.strip() for p in parts if p.strip()]
+
+    def build_timeline_message(
+        self, text: str, phonemes: list[Phoneme], audio_start_time: float
+    ) -> dict:
+        """
+        Phase 2.2: 构建混合时间线消息。
+
+        将口型帧和分段表情合并为一条时间线，按 timeMs 排序。
+        前端按时间线调度播放，消除单独的表情消息。
+
+        Returns:
+            {"command": "timeline", "entries": [...], "audio_start_time": ...}
+        """
+        entries: list[dict] = []
+
+        # 1. 口型帧 → timeline entries
+        lip_frames = self.phonemes_to_lip_sync(phonemes)
+        for f in lip_frames:
+            entries.append({
+                "type": "mouth",
+                "timeMs": f["time_ms"],
+                "mouth": f.get("mouth", "N"),
+                "params": f.get("params", {}),
+            })
+
+        # 2. 分段情绪 → timeline entries
+        segments = self._split_text_to_segments(text)
+        if segments:
+            # 找到每个段对应的音素时间范围
+            seg_phonemes = self._align_phonemes_to_segments(phonemes, segments)
+            cum_offset = 0.0
+            for seg_text, seg_ps in zip(segments, seg_phonemes):
+                if not seg_ps:
+                    cum_offset += 1000.0  # 无音素时粗略估计 1 秒
+                    continue
+
+                emotion = detect_emotion(seg_text)
+                seg_start = seg_ps[0].start_ms
+                seg_end = seg_ps[-1].end_ms
+
+                if emotion != "neutral":
+                    expr = self.get_expression_for_text(seg_text)
+                    entries.append({
+                        "type": "expression",
+                        "timeMs": seg_start,
+                        "expression": {
+                            "name": expr.name,
+                            "intensity": expr.intensity,
+                            "fadeInMs": expr.fade_in_ms,
+                            "durationMs": seg_end - seg_start,
+                            "fadeOutMs": expr.fade_out_ms,
+                        },
+                    })
+
+                cum_offset = seg_end
+
+        # 3. 按 timeMs 排序
+        entries.sort(key=lambda e: e["timeMs"])
+
+        return {
+            "command": "timeline",
+            "entries": entries,
+            "audio_start_time": audio_start_time,
+        }
+
+    @staticmethod
+    def _align_phonemes_to_segments(
+        phonemes: list[Phoneme], segments: list[str]
+    ) -> list[list[Phoneme]]:
+        """
+        将 phoneme 列表按文本段大致对齐。
+
+        策略：按 char 字段累积匹配到各段文本字符。
+        """
+        result: list[list[Phoneme]] = [[] for _ in segments]
+        if not phonemes:
+            return result
+
+        # 收集所有 phoneme 的 char 并构建累积文本
+        p_chars = [p.char for p in phonemes if p.char]
+        if not p_chars:
+            # fallback: 均匀分配
+            n = len(phonemes)
+            k = len(segments)
+            size = max(1, n // k)
+            for j in range(k):
+                start = j * size
+                end = start + size if j < k - 1 else n
+                result[j] = phonemes[start:end]
+            return result
+
+        # 按 char 累计长度分配到最近的 segment
+        seg_char_counts = [len(s) for s in segments]
+        p_idx = 0
+        char_count = 0
+        for seg_idx, target_len in enumerate(seg_char_counts):
+            seg_end = char_count + target_len
+            while p_idx < len(phonemes) and char_count < seg_end:
+                result[seg_idx].append(phonemes[p_idx])
+                char_count += len(phonemes[p_idx].char)
+                p_idx += 1
+            char_count = seg_end  # 对齐到段边界
+
+        # 将剩余 phoneme 分配给最后一个段
+        while p_idx < len(phonemes):
+            result[-1].append(phonemes[p_idx])
+            p_idx += 1
+
+        return result
+
     # ── 组合消息 ──────────────────────────────────
 
     def build_lip_sync_message(
