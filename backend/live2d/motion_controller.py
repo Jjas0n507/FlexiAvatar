@@ -52,9 +52,40 @@ _EMOTION_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
+# SenseVoice 语音情绪 → Live2D 表情映射
+# 用于将 SenseVoice 的 SER 输出映射到 Live2D 模型支持的表达式
+_SPEECH_EMOTION_MAP: dict[str, str] = {
+    "happy": "happy",
+    "angry": "angry",
+    "sad": "sad",
+    "fearful": "surprised",
+    "surprised": "surprised",
+    "disgusted": "sad",
+    "neutral": "neutral",
+}
 
-def detect_emotion(text: str) -> str:
-    """从文本中检测情绪，返回 emotion name"""
+
+def detect_emotion(text: str, speech_emotion: str | None = None) -> str:
+    """
+    从文本和语音情绪中检测最终情绪。
+
+    优先级：语音情绪（SenseVoice SER）> 文本关键词检测。
+    语音情绪为非 neutral 时直接使用；neutral 或 None 时 fallback 到文本检测。
+
+    Args:
+        text: 待检测的文本
+        speech_emotion: SenseVoice 识别的语音情绪，None 表示无语音情绪输入
+
+    Returns:
+        emotion name: "happy"/"angry"/"sad"/"surprised"/"thinking"/"neutral"
+    """
+    # 优先使用语音情绪
+    if speech_emotion and speech_emotion != "neutral":
+        mapped = _SPEECH_EMOTION_MAP.get(speech_emotion, speech_emotion)
+        if mapped != "neutral":
+            return mapped
+
+    # Fallback: 文本关键词检测 (现有逻辑)
     scores = {}
     for emotion, keywords in _EMOTION_KEYWORDS.items():
         score = sum(1 for kw in keywords if kw in text)
@@ -255,9 +286,9 @@ class MotionController:
 
     # ── 表情生成 ──────────────────────────────────
 
-    def get_expression_for_text(self, text: str) -> ExpressionCommand:
-        """根据文本内容决定表情"""
-        emotion = detect_emotion(text)
+    def get_expression_for_text(self, text: str, speech_emotion: str | None = None) -> ExpressionCommand:
+        """根据文本内容决定表情，可选传入语音情绪以覆盖文本检测"""
+        emotion = detect_emotion(text, speech_emotion=speech_emotion)
         intensity_map = {
             "neutral": 0.0,
             "happy": 0.8,
@@ -336,13 +367,20 @@ class MotionController:
         return [p.strip() for p in parts if p.strip()]
 
     def build_timeline_message(
-        self, text: str, phonemes: list[Phoneme], audio_start_time: float
+        self, text: str, phonemes: list[Phoneme], audio_start_time: float,
+        speech_emotion: str | None = None,
     ) -> dict:
         """
         Phase 2.2: 构建混合时间线消息。
 
         将口型帧和分段表情合并为一条时间线，按 timeMs 排序。
         前端按时间线调度播放，消除单独的表情消息。
+
+        Args:
+            text: TTS 文本
+            phonemes: 音素列表
+            audio_start_time: 音频起始时间戳
+            speech_emotion: SenseVoice 语音情绪 (Phase 5)，None 表示无语音情绪输入
 
         Returns:
             {"command": "timeline", "entries": [...], "audio_start_time": ...}
@@ -370,7 +408,7 @@ class MotionController:
                     cum_offset += 1000.0  # 无音素时粗略估计 1 秒
                     continue
 
-                emotion = detect_emotion(seg_text)
+                emotion = detect_emotion(seg_text, speech_emotion=speech_emotion)
                 seg_start = seg_ps[0].start_ms
                 seg_end = seg_ps[-1].end_ms
 

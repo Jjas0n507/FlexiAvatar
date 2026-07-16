@@ -17,6 +17,8 @@ class ASRResult:
     confidence: float        # 置信度 0.0 ~ 1.0
     is_final: bool = True    # 是否是最终结果 (流式识别的中间结果时为 False)
     language: str = "zh"     # 识别语言
+    emotion: str = "neutral"           # 语音情绪: happy/angry/sad/neutral/surprised/fearful/disgusted
+    emotion_confidence: float = 0.0    # 情绪识别置信度 0.0 ~ 1.0
 
 
 class BaseASR(ABC):

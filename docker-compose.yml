@@ -24,6 +24,7 @@ services:
     volumes:
       - ./backend:/app/backend:ro
       - ./resources/models:/app/resources/models:rw
+      - modelscope_cache:/root/.cache/modelscope:rw
     devices:
       - /dev/kfd
       - /dev/dri:/dev/dri
@@ -44,3 +45,4 @@ services:
 
 volumes:
   ollama_data:
+  modelscope_cache:

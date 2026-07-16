@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir \
     fastapi>=0.115.0 uvicorn[standard]>=0.34.0 websockets>=12.0 \
     pyyaml>=6.0 python-dotenv>=1.0 pydantic>=2.0 httpx>=0.28.0 \
     faster-whisper silero-vad edge-tts pydub pypinyin \
-    soundfile>=0.12.0 openai>=1.0.0
+    soundfile>=0.12.0 openai>=1.0.0 \
+    funasr>=1.2.0
 
 # 注意: ROCm GPU 验证在运行时进行（docker compose up 时挂载 /dev/kfd /dev/dri）
 # 构建时不验证（docker build 没有 GPU 设备）

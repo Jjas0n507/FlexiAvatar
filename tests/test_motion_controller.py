@@ -9,7 +9,10 @@ from backend.live2d.model_profile import (
     ModelProfile, ParameterIds, MouthShapeParams, ExpressionDef,
     MotionDef, IdleConfig,
 )
-from backend.live2d.motion_controller import MotionController, MotionCommand, ExpressionCommand
+from backend.live2d.motion_controller import (
+    MotionController, MotionCommand, ExpressionCommand,
+    detect_emotion, _SPEECH_EMOTION_MAP,
+)
 from backend.tts.base import Phoneme
 
 
@@ -409,3 +412,79 @@ class TestTimelineMessage:
         msg = ctrl.build_timeline_message("测试。", [], 0.0)
         assert msg["command"] == "timeline"
         assert msg["entries"] == []
+
+    def test_timeline_with_speech_emotion(self):
+        """speech_emotion 参数传入不崩溃"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=100, char="好"),
+        ]
+        msg = ctrl.build_timeline_message("好的。", phonemes, 0.0, speech_emotion="happy")
+        assert msg["command"] == "timeline"
+        assert isinstance(msg["entries"], list)
+
+    def test_timeline_with_none_speech_emotion(self):
+        """speech_emotion=None 向后兼容（等于不传）"""
+        ctrl = MotionController(profile=make_test_profile())
+        phonemes = [
+            Phoneme(phoneme="A", start_ms=0, end_ms=100, char="好"),
+        ]
+        msg = ctrl.build_timeline_message("好的。", phonemes, 0.0, speech_emotion=None)
+        assert msg["command"] == "timeline"
+
+
+# ── Phase 5: SenseVoice 语音情绪融合 ─────────────
+
+class TestSpeechEmotionOverride:
+    """detect_emotion() speech_emotion 参数：语音情绪优先于文本关键词"""
+
+    def test_speech_emotion_happy_overrides_neutral_text(self):
+        """语音 happy → 覆盖文本 neutral"""
+        assert detect_emotion("今天星期三", speech_emotion="happy") == "happy"
+
+    def test_speech_emotion_angry_overrides_text_keyword(self):
+        """语音 angry → 覆盖文本"开心"（语音优先）"""
+        assert detect_emotion("今天真开心", speech_emotion="angry") == "angry"
+
+    def test_speech_emotion_neutral_falls_back_to_text(self):
+        """语音 neutral + 文本"开心" → fallback 到文本 happy"""
+        assert detect_emotion("太开心了！", speech_emotion="neutral") == "happy"
+
+    def test_speech_emotion_none_backward_compatible(self):
+        """speech_emotion=None → 行为完全不变（向后兼容）"""
+        assert detect_emotion("太棒了！哈哈", speech_emotion=None) == "happy"
+        assert detect_emotion("今天星期三", speech_emotion=None) == "neutral"
+
+    def test_speech_emotion_fearful_maps_to_surprised(self):
+        """SenseVoice fearful → Live2D surprised"""
+        assert detect_emotion("好可怕", speech_emotion="fearful") == "surprised"
+
+    def test_speech_emotion_surprised_maps_directly(self):
+        """SenseVoice surprised → Live2D surprised"""
+        assert detect_emotion("哇", speech_emotion="surprised") == "surprised"
+
+    def test_speech_emotion_disgusted_maps_to_sad(self):
+        """SenseVoice disgusted → Live2D sad"""
+        assert detect_emotion("好恶心", speech_emotion="disgusted") == "sad"
+
+    def test_speech_emotion_sad_overrides_happy_text(self):
+        """语音 sad 覆盖文本"哈哈"（语音信号更可靠）"""
+        assert detect_emotion("哈哈真开心", speech_emotion="sad") == "sad"
+
+    def test_speech_emotion_map_all_keys_documented(self):
+        """_SPEECH_EMOTION_MAP 覆盖所有 SER 情绪"""
+        assert set(_SPEECH_EMOTION_MAP.keys()) == {
+            "happy", "angry", "sad", "neutral", "fearful", "surprised", "disgusted",
+        }
+
+    def test_get_expression_for_text_with_speech_emotion(self):
+        """get_expression_for_text 接受 speech_emotion 参数"""
+        ctrl = MotionController(profile=make_test_profile())
+        expr = ctrl.get_expression_for_text("今天星期三", speech_emotion="happy")
+        assert expr.name == "happy"
+
+    def test_get_expression_for_text_without_speech_emotion(self):
+        """get_expression_for_text 不传 speech_emotion 时向后兼容"""
+        ctrl = MotionController(profile=make_test_profile())
+        expr = ctrl.get_expression_for_text("太棒了！哈哈")
+        assert expr.name == "happy"

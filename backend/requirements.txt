@@ -12,12 +12,12 @@ numpy
 soundfile>=0.12.0
 PyAudio>=0.2.0
 
-# VAD (阶段2)
-# silero-vad
+# VAD
+silero-vad
 
-# ASR (阶段2)
-# funasr
-# torch
+# ASR
+funasr>=1.2.0
+torch
 
 # TTS
 edge-tts
@@ -37,3 +37,7 @@ httpx>=0.28.0
 pydantic>=2.0
 
 # 分词 / 音素处理 — 已在上方 TTS 区域
+
+# 开发 / 测试
+pytest>=8.0
+pytest-asyncio>=0.24.0

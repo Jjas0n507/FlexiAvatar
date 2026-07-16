@@ -53,13 +53,24 @@ export interface Phoneme {
 }
 
 export interface Live2DControlPayload {
-  command: "lip_sync" | "expression" | "motion" | "idle" | "reset" | "interrupt" | "state";
+  command: "lip_sync" | "expression" | "motion" | "idle" | "reset" | "interrupt" | "state" | "timeline";
   lipSyncFrames?: LipSyncFrame[];
   expression?: ExpressionParams;
   motion?: MotionParams;
   state?: string;
   idleEnabled?: boolean;
   audioStartTime?: number;
+  // timeline command (Phase 4+): unified mouth + expression timeline
+  entries?: TimelineEntry[];
+  audio_start_time?: number;
+}
+
+export interface TimelineEntry {
+  type: "mouth" | "expression";
+  timeMs: number;
+  mouth?: string;
+  params?: Record<string, number>;
+  expression?: ExpressionParams;
 }
 
 export interface LipSyncFrame {

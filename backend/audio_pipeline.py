@@ -179,18 +179,22 @@ class AudioPipeline:
 
             # 使用流式 ASR，每识别出一个片段就推送给前端
             final_text = ""
+            speech_emotion: str | None = None  # Phase 5: SenseVoice 语音情绪
             async for partial_result in self._asr.stream_transcribe(audio):
                 if cancel.is_set():
                     return
 
                 if partial_result.is_final:
                     final_text = partial_result.text.strip()
+                    speech_emotion = partial_result.emotion  # Phase 5: 提取语音情绪
                     await self._on_asr_result(final_text, True) if self._on_asr_result else None
                 else:
                     # 中间结果：显示正在进行中的识别
                     await self._on_asr_result(partial_result.text, False) if self._on_asr_result else None
 
             logger.info(f"ASR result: {final_text}")
+            if speech_emotion and speech_emotion != "neutral":
+                logger.info(f"Speech emotion: {speech_emotion}")
 
             if not final_text:
                 await self._session.transition("speaking_done", reason="empty_asr")
@@ -258,6 +262,9 @@ class AudioPipeline:
                 if cancel.is_set():
                     return
 
+                # 记录音频起始时间（必须在发送音频之前，保证口型同步）
+                tts_start_time = time.time()
+
                 # 发送音频块
                 if self._on_tts_audio:
                     await self._on_tts_audio(tts_result)
@@ -265,7 +272,8 @@ class AudioPipeline:
                 # 口型 + 情绪时间线 (Phase 4: 统一使用 build_timeline_message)
                 if self._on_live2d and tts_result.phonemes:
                     timeline_msg = self._motion.build_timeline_message(
-                        tts_result.text, tts_result.phonemes, time.time()
+                        tts_result.text, tts_result.phonemes, tts_start_time,
+                        speech_emotion=speech_emotion,  # Phase 5: 传入语音情绪
                     )
                     await self._on_live2d(timeline_msg)
 

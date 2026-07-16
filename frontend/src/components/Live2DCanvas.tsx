@@ -164,7 +164,7 @@ const Live2DCanvas: React.FC = () => {
   }, []);
 
   // ponytail: 自主表情/动作定时器
-  const autoBehaviorTimerRef = useRef<ReturnType<typeof setInterval>>();
+  const autoBehaviorTimerRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   // ── 模型初始化 ────────────────────────────────
 
@@ -437,6 +437,46 @@ const Live2DCanvas: React.FC = () => {
         prevControlRef.current = control;
 
         switch (control.command) {
+          case "timeline":
+            // Phase 4+: 统一时间线 — 从 entries 中提取 mouth/expression 事件
+            if (control.entries?.length) {
+              // 计算时钟偏移：audio_start_time 是后端 Unix 时间戳(秒)
+              const elapsed = control.audio_start_time
+                ? Date.now() - control.audio_start_time * 1000
+                : 0;
+
+              // 提取口型帧
+              const lipFrames: LipSyncFrame[] = [];
+              for (const entry of control.entries) {
+                if (entry.type === "mouth") {
+                  lipFrames.push({
+                    timeMs: Math.max(0, entry.timeMs - elapsed),
+                    mouth: entry.mouth ?? "N",
+                    params: entry.params ?? {},
+                  });
+                }
+              }
+              if (lipFrames.length > 0) {
+                applyLipSync(lipFrames);
+              }
+
+              // 提取表情事件并定时调度
+              for (const entry of control.entries) {
+                if (entry.type === "expression" && entry.expression?.name) {
+                  const delay = Math.max(0, entry.timeMs - elapsed);
+                  const { name, durationMs, fadeOutMs } = entry.expression;
+                  setTimeout(() => {
+                    setExpression(name);
+                    // 表情持续后回 neutral
+                    if (durationMs > 0) {
+                      setTimeout(() => setExpression("neutral"), durationMs + (fadeOutMs ?? 300));
+                    }
+                  }, delay);
+                }
+              }
+            }
+            break;
+
           case "lip_sync":
             if (control.lipSyncFrames?.length) {
               applyLipSync(control.lipSyncFrames);
