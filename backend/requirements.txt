@@ -19,8 +19,10 @@ PyAudio>=0.2.0
 # funasr
 # torch
 
-# TTS (阶段2)
-# edge-tts
+# TTS
+edge-tts
+pydub
+pypinyin
 
 # LLM
 openai>=1.0.0
@@ -34,5 +36,4 @@ python-dotenv>=1.0
 httpx>=0.28.0
 pydantic>=2.0
 
-# 分词 / 音素处理 (阶段4)
-# pypinyin
+# 分词 / 音素处理 — 已在上方 TTS 区域

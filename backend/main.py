@@ -249,10 +249,10 @@ async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) 
                     if pipeline._on_tts_audio:
                         await pipeline._on_tts_audio(tts_result)
                     if pipeline._on_live2d and tts_result.phonemes:
-                        lip_msg = pipeline._motion.build_lip_sync_message(
-                            tts_result.phonemes, time.time()
+                        timeline_msg = pipeline._motion.build_timeline_message(
+                            tts_result.text, tts_result.phonemes, time.time()
                         )
-                        await pipeline._on_live2d(lip_msg)
+                        await pipeline._on_live2d(timeline_msg)
                     total_dur += tts_result.duration_ms
             except Exception as e:
                 logger.warning(f"TTS 合成失败（跳过）: {e}")

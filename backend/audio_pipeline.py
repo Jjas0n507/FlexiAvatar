@@ -262,20 +262,16 @@ class AudioPipeline:
                 if self._on_tts_audio:
                     await self._on_tts_audio(tts_result)
 
-                # 口型同步
+                # 口型 + 情绪时间线 (Phase 4: 统一使用 build_timeline_message)
                 if self._on_live2d and tts_result.phonemes:
-                    lip_msg = self._motion.build_lip_sync_message(
-                        tts_result.phonemes, time.time()
+                    timeline_msg = self._motion.build_timeline_message(
+                        tts_result.text, tts_result.phonemes, time.time()
                     )
-                    await self._on_live2d(lip_msg)
+                    await self._on_live2d(timeline_msg)
 
                 total_duration_ms += tts_result.duration_ms
 
-            # 情绪（在整个回复完成后发送一次）
-            if self._on_live2d:
-                expr = self._motion.get_expression_for_text(response_text)
-                expr_msg = self._motion.build_expression_message(expr)
-                await self._on_live2d(expr_msg)
+            # Phase 4: 情绪已整合进 timeline，不再单独发送 expression 消息
 
             # 等待所有音频播完
             await asyncio.sleep(total_duration_ms / 1000.0)
