@@ -8,44 +8,28 @@ Live2D 动画控制器。
 - 音素 → 口型参数映射 (A, I, U, E, O)
 - 状态驱动的表情选择
 - 情绪关键词检测
+
+支持 ModelProfile: 传入则使用模型抽象层，不传则 fallback 到硬编码值。
 """
+
+from __future__ import annotations
 
 import random
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from backend.tts.base import Phoneme
 
+if TYPE_CHECKING:
+    from backend.live2d.model_profile import ModelProfile
+
 
 # ── 口型映射表 ──────────────────────────────────
-# 中文拼音韵母 → Live2D 五口型 + 闭嘴
-
-_PHONEME_TO_MOUTH = {
-    # A 组 — 张口
-    "a": "A", "ai": "A", "an": "A", "ang": "A", "ao": "A",
-    "ia": "A", "ian": "A", "iang": "A", "iao": "A",
-    "ua": "A", "uai": "A", "uan": "A", "uang": "A",
-    # E 组 — 半开
-    "e": "E", "ei": "E", "en": "E", "eng": "E", "er": "E",
-    "ie": "E", "ue": "E",
-    # I 组 — 咧嘴
-    "i": "I", "in": "I", "ing": "I",
-    # O 组 — 圆唇
-    "o": "O", "ou": "O", "ong": "O",
-    "io": "O", "iong": "O",
-    # U 组 — 嘟嘴
-    "u": "U", "un": "U",
-    "iu": "U", "ui": "U", "uo": "U",
-    "ü": "U", "üe": "U", "üan": "U", "ün": "U",
-}
-
-
-def pinyin_final_to_mouth(final: str) -> str:
-    """将拼音韵母映射到 Live2D 口型"""
-    # 去掉声调数字
-    final_clean = final.rstrip("0123456789")
-    return _PHONEME_TO_MOUTH.get(final_clean, "N")  # 默认闭嘴
+# 已提取到 backend.live2d.mouth_shapes。保留此别名用于向后兼容。
+# TODO(Phase 0.5): 删除此别名，所有引用改为直接从 mouth_shapes import
+from backend.live2d.mouth_shapes import PINYIN_TO_MOUTH as _PHONEME_TO_MOUTH, pinyin_final_to_mouth  # noqa: F401
 
 
 # ── 情绪关键词 ──────────────────────────────────
@@ -125,6 +109,10 @@ class MotionController:
     Live2D 动画控制器。
 
     用法:
+        # 新方式：传入 ModelProfile，使用模型抽象层
+        ctrl = MotionController(profile=profile)
+
+        # 旧方式：不传 profile，fallback 到硬编码值（向后兼容）
         ctrl = MotionController()
 
         # 从 TTS 结果生成口型帧
@@ -140,18 +128,17 @@ class MotionController:
         cmd = ctrl.get_interrupt_command()
     """
 
+    def __init__(self, profile: "ModelProfile | None" = None):
+        self.profile = profile
+
     # ── 口型生成 ──────────────────────────────────
 
     def phonemes_to_lip_sync(self, phonemes: list[Phoneme]) -> list[dict]:
         """
         将音素时间线转换为 Live2D 口型帧序列。
 
-        Live2D Cubism 标准口型参数:
-        - ParamMouthOpenY: 嘴巴纵向张开 (基础)
-        - ParamMouthForm: 嘴巴横向宽度 (+ 宽, - 窄)
-        - ParamMouthA/E/I/O/U: 各口型贡献值
-
-        每个口型帧包含达到该参数值的目标时间。
+        有 profile 时：仅输出模型支持的参数（open_y + form）。
+        无 profile 时：fallback 到硬编码值（含 ParamMouthA/I/U/E/O）。
         """
         frames = []
         for p in phonemes:
@@ -171,7 +158,23 @@ class MotionController:
         return frames
 
     def _mouth_params(self, mouth: str) -> dict[str, float]:
-        """将口型符号映射到 Live2D Cubism 参数"""
+        """将口型符号映射到 Live2D Cubism 参数。有 profile 时使用模型实际参数 ID。"""
+        if self.profile is not None:
+            # 从 profile 读取模型实际支持的参数 ID 和口型值
+            pid = self.profile.parameters
+            shape = self.profile.mouth_shapes.get(mouth)
+            if shape is not None:
+                return {
+                    pid.lip_open_y: shape.open_y,
+                    pid.lip_form: shape.form,
+                }
+            # 未知口型 → 闭嘴
+            return {
+                pid.lip_open_y: 0.0,
+                pid.lip_form: 0.0,
+            }
+
+        # Fallback: 旧硬编码值（向后兼容）
         mapping = {
             "A": {"ParamMouthOpenY": 0.8, "ParamMouthA": 1.0},
             "I": {"ParamMouthOpenY": 0.3, "ParamMouthForm": 0.8, "ParamMouthI": 1.0},
@@ -217,7 +220,15 @@ class MotionController:
     # ── 动作生成 ──────────────────────────────────
 
     def get_motion_for_state(self, state: str) -> MotionCommand | None:
-        """根据会话状态决定身体动作"""
+        """根据会话状态决定身体动作。有 profile 时使用模型实际的 motion group 名。"""
+        if self.profile is not None:
+            motion_defs = self.profile.motions.get(state)
+            if not motion_defs:
+                return None
+            d = random.choice(motion_defs)
+            return MotionCommand(group=d.group, index=d.index, priority=1)
+
+        # Fallback: 旧硬编码值（向后兼容）
         state_motions = {
             "listening": [("listen", 0), ("listen", 1)],
             "processing": [("think", 0)],
