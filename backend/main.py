@@ -369,6 +369,15 @@ async def websocket_endpoint(websocket: WebSocket):
         },
     })
 
+    # Phase 0.7: 发送 ModelProfile 到前端
+    if model_profile is not None:
+        await websocket.send_json({
+            "type": "live2d.profile",
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "payload": model_profile.to_frontend_dict(),
+        })
+
     try:
         while True:
             raw = await websocket.receive_text()
