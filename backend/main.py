@@ -434,6 +434,13 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket 异常: {e}", exc_info=True)
     finally:
         connected_clients.pop(client_id, None)
+        # 停止并移除该客户端的流水线，防止 run() 任务泄漏
+        pipeline = client_pipelines.pop(client_id, None)
+        if pipeline:
+            await pipeline.shutdown()
+        # 最后一个客户端断开时重置会话状态机，避免下一个连接继承残留状态 (如 INTERRUPTED)
+        if not connected_clients:
+            await session_manager.reset()
         logger.info(f"客户端已清理: {client_id} (剩余 {len(connected_clients)})")
 
 

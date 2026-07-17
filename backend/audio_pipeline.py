@@ -66,6 +66,10 @@ class AudioPipeline:
         self._audio_buffer: list[np.ndarray] = []
         self._input_queue: asyncio.Queue = asyncio.Queue()
 
+        # 流水线停止标志 (独立于 session.cancel_event —— 后者在 INTERRUPTED 期间置位，
+        # 仅用于取消 LLM/TTS 任务，不能作为主循环退出条件)
+        self._stop = asyncio.Event()
+
     # ── 初始化 ──────────────────────────────────
 
     async def _init_engines(self):
@@ -100,11 +104,10 @@ class AudioPipeline:
         await self._init_engines()
 
         logger.info("Audio pipeline started")
-        cancel = self._session.cancel_event
 
-        while not cancel.is_set():
+        while not self._stop.is_set():
             try:
-                # 等待音频帧 (10ms 超时以便检查 cancel)
+                # 等待音频帧 (100ms 超时以便检查停止标志)
                 try:
                     audio_frame = await asyncio.wait_for(
                         self._input_queue.get(), timeout=0.1
@@ -314,6 +317,7 @@ class AudioPipeline:
 
     async def shutdown(self):
         """关闭流水线"""
+        self._stop.set()
         self._audio_buffer.clear()
         self._history.clear()
         while not self._input_queue.empty():

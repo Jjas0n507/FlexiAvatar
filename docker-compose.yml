@@ -23,6 +23,7 @@ services:
     ports: ["8765:8765"]
     volumes:
       - ./backend:/app/backend:ro
+      - ./frontend/public/live2d:/app/frontend/public/live2d:ro   # ModelProfile (model_profile.yaml)
       - ./resources/models:/app/resources/models:rw
       - modelscope_cache:/root/.cache/modelscope:rw
     devices:

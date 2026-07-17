@@ -43,13 +43,17 @@ class OpenAIAdapter(BaseLLM):
             max_tokens: 最大 token，默认从配置读取
         """
         self._model = model or config.get("llm.openai.model", "gpt-4o")
-        self._base_url = base_url or os.environ.get(
-            "OPENAI_BASE_URL",
-            config.get("llm.openai.base_url", "https://api.openai.com/v1"),
+        # 用 or 链而非 env 默认值：docker-compose 在 .env 缺失时会注入空字符串，
+        # 空值应回退到 config 而不是覆盖它
+        self._base_url = (
+            base_url
+            or os.environ.get("OPENAI_BASE_URL")
+            or config.get("llm.openai.base_url", "https://api.openai.com/v1")
         )
-        self._api_key = api_key or os.environ.get(
-            "OPENAI_API_KEY",
-            config.get("llm.openai.api_key", ""),
+        self._api_key = (
+            api_key
+            or os.environ.get("OPENAI_API_KEY")
+            or config.get("llm.openai.api_key", "")
         )
         self._temperature = temperature if temperature is not None else config.get("llm.openai.temperature", 0.7)
         self._max_tokens = max_tokens if max_tokens is not None else config.get("llm.openai.max_tokens", 1024)

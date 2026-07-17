@@ -14,6 +14,15 @@ import httpx
 import websockets
 
 
+async def recv_until(ws, msg_type: str, limit: int = 20, timeout: float = 30):
+    """接收消息直到出现目标类型，跳过穿插的推送（live2d.profile / live2d.control / state.change 等）"""
+    for _ in range(limit):
+        msg = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+        if msg["type"] == msg_type:
+            return msg
+    raise AssertionError(f"未在 {limit} 条消息内收到 {msg_type}")
+
+
 async def main():
     print("=" * 50)
     print("Integration Test")
@@ -27,7 +36,7 @@ async def main():
 
         # Ping/pong
         await ws.send(json.dumps({"type": "ping", "id": "t1", "timestamp": 0, "payload": {}}))
-        pong = json.loads(await ws.recv())
+        pong = await recv_until(ws, "pong")
         assert pong["type"] == "pong"
         print("[OK] Ping/pong")
 
@@ -36,7 +45,7 @@ async def main():
             "type": "chat.text", "id": "t2", "timestamp": 0,
             "payload": {"text": "Hello test"}
         }))
-        resp = json.loads(await ws.recv())
+        resp = await recv_until(ws, "llm.stream", limit=50)
         assert resp["type"] == "llm.stream"
         print(f"[OK] Chat response: '{resp['payload']['text'][:40]}'")
 
