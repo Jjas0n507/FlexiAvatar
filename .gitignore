@@ -51,3 +51,6 @@ resources/models/
 # Test outputs
 resources/test_audio/tts_output_*
 resources/test_audio/*.mp3
+
+# CodeGraph 本地索引
+.codegraph/
