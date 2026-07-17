@@ -5,9 +5,9 @@
 
 ## 当前位置
 
-- **分支**: `master`
-- **阶段**: Phase 4 完成 → 全部 4 阶段已完成
-- **进度**: 全链路已验证通过，Live2D 动画系统全面升级完成（76 tests passing）
+- **分支**: `feat/audiocontext-lipsync`
+- **阶段**: AudioContext 口型同步升级完成
+- **进度**: 音画同步问题修复，82 tests passing
 
 ## 最近提交
 
@@ -61,12 +61,11 @@ tests/test_phoneme.py, test_prosody.py, test_idle_scheduler.py
 1. 使用 `live2d-renderer` (Moebytes) 而非手动集成 Cubism SDK — 减少 80% 样板代码
 2. ModelProfile 抽象层 — 模型参数 ID/口型值/表情/动作全部 YAML 配置
 3. MotionController 单例注入 AudioPipeline — 消除双实例
-4. 口型同步使用 setTimeout 方案（50ms 偏差无感知），后续可选 AudioContext 升级
+4. 口型同步使用 `AudioContext.currentTime` + `requestAnimationFrame` 驱动，与音频播放精确同步
 5. 自主运动: `randomMotion: true` + `enableMotion: true` + idle scheduler 指令
 
 ## 已知问题（高优先级）
 
 1. **延迟极高**: ASR Whisper base 模型加载 ~50s，后续 ~10s。Edge-TTS 网络延迟不稳定。
-2. **口型与语音不同步**: 口型用 `setTimeout` 帧序列播放，未与 `AudioContext.currentTime` 同步。
 
 详见 `TODO.md`。

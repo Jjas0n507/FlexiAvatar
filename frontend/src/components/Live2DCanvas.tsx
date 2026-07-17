@@ -4,13 +4,14 @@
  * 使用 live2d-renderer 库加载 Cubism 模型，处理 WebSocket 传来的
  * 口型同步、表情、动作指令。内置呼吸、自动眨眼、物理模拟。
  *
- * ponytail: 口型同步使用简单帧序列播放，不做精确 audioContext 同步。
- *           音频和口型的时序偏差在 50ms 以内，肉眼无感知。
+ * ponytail: 口型同步用 rAF + audioEngine.currentTime 驱动，与音频时钟精确同步。
+ *           无 AudioContext 时 fallback 到 performance.now()。
  */
 
 import React, { useRef, useEffect, useCallback, useState } from "react";
 import { Live2DCubismModel } from "live2d-renderer";
 import { useAgentStore } from "../stores/agent-store";
+import { audioEngine } from "../hooks/useAudioPlayback";
 import type { Live2DControlPayload, LipSyncFrame, ModelProfile } from "../types";
 
 // MotionPriority enum 值 (live2d-renderer 导出为 type，运行时用数值)
@@ -110,8 +111,12 @@ function setMouthParams(
 ) {
   if (!model?.loaded) return;
   const m = model as unknown as ModelWithSetParam;
-  m.setParameter(paramOpenY, openY);
-  m.setParameter(paramForm, form);
+  try {
+    m.setParameter(paramOpenY, openY);
+    m.setParameter(paramForm, form);
+  } catch {
+    // model doesn't support these param IDs
+  }
 }
 
 // ── 辅助：获取可用动作组名 ──────────────────────
@@ -268,51 +273,85 @@ const Live2DCanvas: React.FC = () => {
     return () => resizeObserver.disconnect();
   }, []);
 
-  // ── 口型同步引擎 ──────────────────────────────
+  // ── 口型同步引擎 (rAF + audioEngine 驱动) ──────────
 
   const lipSyncTimerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const lipSyncRafRef = useRef<number>(0);
 
   const applyLipSync = useCallback((frames: LipSyncFrame[]) => {
     if (!frames.length) return;
 
+    // 清理上一轮
     lipSyncTimerRef.current.forEach(clearTimeout);
     lipSyncTimerRef.current = [];
+    cancelAnimationFrame(lipSyncRafRef.current);
 
     const profile = profileRef.current;
     const mouthParams = getMouthParams(profile);
 
-    for (let i = 0; i < frames.length; i++) {
-      const frame = frames[i];
-      const delay = Math.max(0, frame.timeMs);
+    const callTime = performance.now();
+    const maxWaitMs = 10000; // 最多等 10 秒音频开始 (decodeAudioData 可能需要 1-2 秒)
+    let frameIdx = 0;
 
-      const nextFrame = i + 1 < frames.length ? frames[i + 1] : null;
-      const nextDelay = nextFrame ? nextFrame.timeMs - frame.timeMs : 100;
+    // 记录调用时的 playbackStartTime — 等待它变化（新音频开始播放）
+    // 避免拾取上一段音频残留的 startTime
+    const prevStartTime = audioEngine.playbackStartTime;
 
-      const timer = setTimeout(() => {
-        // Phase 1.5: 优先使用 frame.params（后端计算的具体参数值）
+    const tick = () => {
+      // 每帧动态读取音频时钟 — 不在启动时捕获
+      const ctx = audioEngine.audioCtx;
+      const startTime = audioEngine.playbackStartTime;
+
+      let nowMs: number;
+      if (ctx && startTime > 0 && startTime !== prevStartTime) {
+        // 新音频已开始 — 用音频时钟精确同步
+        nowMs = (ctx.currentTime - startTime) * 1000;
+      } else if (performance.now() - callTime < maxWaitMs) {
+        // 等待新音频开始解码/播放
+        lipSyncRafRef.current = requestAnimationFrame(tick);
+        return;
+      } else {
+        // 超时 fallback — audio 可能失败
+        nowMs = performance.now() - callTime - maxWaitMs;
+      }
+
+      // 顺序扫描：跳到当前时间对应的帧
+      while (frameIdx + 1 < frames.length && frames[frameIdx + 1].timeMs <= nowMs) {
+        frameIdx++;
+      }
+
+      const frame = frames[frameIdx];
+      if (frame && frame.timeMs <= nowMs) {
+        // 优先使用 frame.params（后端计算的具体参数值）
+        let applied = false;
         if (frame.params && Object.keys(frame.params).length > 0) {
           const m = modelRef.current as unknown as ModelWithSetParam | null;
           if (m?.loaded) {
-            for (const [key, value] of Object.entries(frame.params)) {
-              m.setParameter(key, value);
+            try {
+              for (const [key, value] of Object.entries(frame.params)) {
+                m.setParameter(key, value);
+              }
+              applied = true;
+            } catch {
+              // Cubism SDK crashes on unknown param IDs — fall through to lookup
             }
           }
-        } else {
-          // Fallback: 口型查表
+        }
+        if (!applied) {
+          // Fallback: 口型查表 (只使用 ParamMouthOpenY + ParamMouthForm)
           const shape = getMouthShape(frame.mouth, profile);
           setMouthParams(modelRef.current, shape.openY, shape.form, mouthParams.openY, mouthParams.form);
         }
+      }
 
-        if (nextFrame && nextFrame.mouth !== "N") {
-          const closeTimer = setTimeout(() => {
-            setMouthParams(modelRef.current, 0, 0, mouthParams.openY, mouthParams.form);
-          }, nextDelay * 0.7);
-          lipSyncTimerRef.current.push(closeTimer);
-        }
-      }, delay);
+      // 音频未结束则继续
+      const lastFrame = frames[frames.length - 1];
+      if (nowMs < lastFrame.timeMs + 200) {
+        lipSyncRafRef.current = requestAnimationFrame(tick);
+      }
+    };
 
-      lipSyncTimerRef.current.push(timer);
-    }
+    lipSyncRafRef.current = requestAnimationFrame(tick);
   }, []);
 
   // ── 动作播放 ──────────────────────────────────
@@ -527,6 +566,58 @@ const Live2DCanvas: React.FC = () => {
     return unsub;
   }, [applyLipSync, playMotion, setExpression]);
 
+  // ── TTS Speech → rAF 口型同步 + 表情调度 ───────
+
+  useEffect(() => {
+    const unsub = useAgentStore.subscribe(
+      (state) => state.ttsSpeech,
+      (speech) => {
+        if (!speech?.entries?.length) return;
+        console.log("[Live2D] ttsSpeech subscriber fired, entries:", speech.entries.length);
+
+        // 提取口型帧 → rAF 驱动
+        const lipFrames: LipSyncFrame[] = [];
+        for (const entry of speech.entries) {
+          if (entry.type === "mouth") {
+            lipFrames.push({
+              timeMs: entry.timeMs,
+              mouth: entry.mouth ?? "N",
+              params: entry.params ?? {},
+            });
+          }
+        }
+        console.log("[Live2D] lip frames:", lipFrames.length, "playbackStartTime:", audioEngine.playbackStartTime);
+        if (lipFrames.length > 0) {
+          applyLipSync(lipFrames);
+        }
+
+        // 提取表情事件并调度
+        lipSyncTimerRef.current = lipSyncTimerRef.current.filter((t) => {
+          clearTimeout(t);
+          return false;
+        });
+        for (const entry of speech.entries) {
+          if (entry.type === "expression" && entry.expression?.name) {
+            const delay = Math.max(0, entry.timeMs);
+            const { name, durationMs, fadeOutMs } = entry.expression;
+            const timer = setTimeout(() => {
+              setExpression(name);
+              if (durationMs > 0) {
+                const closeTimer = setTimeout(
+                  () => setExpression("neutral"),
+                  durationMs + (fadeOutMs ?? 300)
+                );
+                lipSyncTimerRef.current.push(closeTimer);
+              }
+            }, delay);
+            lipSyncTimerRef.current.push(timer);
+          }
+        }
+      }
+    );
+    return unsub;
+  }, [applyLipSync, setExpression]);
+
   // ── 会话状态变化 → Live2D 表情 ────────────────
 
   const prevStateRef = useRef<string>("idle");
@@ -555,6 +646,8 @@ const Live2DCanvas: React.FC = () => {
     return () => {
       lipSyncTimerRef.current.forEach(clearTimeout);
       lipSyncTimerRef.current = [];
+      cancelAnimationFrame(lipSyncRafRef.current);
+      lipSyncRafRef.current = 0;
     };
   }, []);
 

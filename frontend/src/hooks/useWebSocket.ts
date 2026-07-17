@@ -8,7 +8,7 @@
 import { useEffect, useCallback } from "react";
 import { wsClient } from "../services/ws-client";
 import { useAgentStore } from "../stores/agent-store";
-import type { WSMessage, SessionState, ModelProfile } from "../types";
+import type { WSMessage, SessionState, ModelProfile, TTSSpeechPayload } from "../types";
 
 export function useWebSocket() {
   const {
@@ -20,6 +20,7 @@ export function useWebSocket() {
     updateToolProgress,
     setLive2DControl,
     setModelProfile,
+    setTtsSpeech,
     setLastError,
     setAvailableTools,
   } = useAgentStore();
@@ -100,6 +101,14 @@ export function useWebSocket() {
         const profile = msg.payload as unknown as ModelProfile;
         setModelProfile(profile);
         console.log("[WS] ModelProfile received:", profile.name);
+      })
+    );
+
+    // TTS speech (合并后的 audio + timeline)
+    unsubs.push(
+      wsClient.on("tts.speech", (msg: WSMessage) => {
+        const payload = msg.payload as unknown as TTSSpeechPayload;
+        setTtsSpeech(payload);
       })
     );
 

@@ -8,7 +8,6 @@
 ### 🔴 高优先级
 
 - [ ] **输入→回复延迟优化**: 首轮 ASR Whisper base 模型加载 ~50s，后续 ~10s。方案：启动时预加载模型（`_init_engines()` 在 startup 调用）、Edge-TTS 考虑备选（Azure TTS / 本地模型）
-- [ ] **口型-语音同步**: 当前用 `setTimeout` 帧序列独立播放，与 `AudioContext.currentTime` 无关联。方案：前端收到 TTS WAV + phonemes 后，用 `AudioContext` 解码播放，口型帧绑定 `currentTime` 偏移量
 
 ### 🟡 中优先级
 
@@ -21,10 +20,10 @@
 - [ ] 表情切换加平滑过渡（lerp 参数值而非直接设）
 - [ ] WebSocket 断线自动重连 + 指数退避（已实现基础版）
 - [ ] Electron 打包集成测试
-- [ ] 前端 `live2d.control` `timeline` command 处理（后端已发 timeline，前端仍用旧 switch/case）
 
 ### 已完成 ✅
 
+- [x] **AudioContext 精确口型同步**: `AudioContext` + `AudioBufferSourceNode` 替代 `HTMLAudioElement`，`requestAnimationFrame` + `audioCtx.currentTime` 驱动口型帧，合并音频+时间线为单条 `tts.speech` 消息消除到达时间差
 - [x] **Live2D 动画系统全面升级** (Phase 0-4, 76 tests)
   - ModelProfile 模型解耦、拼音表统一、MotionController 重构
   - 顺滑口型 (去强制N帧) + RMS 音量驱动缩放

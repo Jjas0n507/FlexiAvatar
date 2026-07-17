@@ -16,6 +16,7 @@ import type {
   ToolProgressPayload,
   Live2DControlPayload,
   ModelProfile,
+  TTSSpeechPayload,
 } from "../types";
 
 export interface ChatMessage {
@@ -61,6 +62,10 @@ export interface AgentState {
   // ModelProfile (从后端 live2d.profile 消息接收)
   modelProfile: ModelProfile | null;
   setModelProfile: (profile: ModelProfile) => void;
+
+  // TTS speech (合并后的 audio + timeline)
+  ttsSpeech: TTSSpeechPayload | null;
+  setTtsSpeech: (speech: TTSSpeechPayload) => void;
 
   // 错误
   lastError: string | null;
@@ -148,6 +153,10 @@ export const useAgentStore = create<AgentState>()(
   // ModelProfile
   modelProfile: null,
   setModelProfile: (profile) => set({ modelProfile: profile }),
+
+  // TTS speech
+  ttsSpeech: null,
+  setTtsSpeech: (speech) => set({ ttsSpeech: speech }),
 
   // 错误
   lastError: null,

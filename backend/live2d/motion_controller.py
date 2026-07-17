@@ -273,14 +273,14 @@ class MotionController:
                 pid.lip_form: 0.0,
             }
 
-        # Fallback: 旧硬编码值（向后兼容）
+        # Fallback: 旧硬编码值 — 只用标准 Cubism 参数 (所有模型都支持)
         mapping = {
-            "A": {"ParamMouthOpenY": 0.8, "ParamMouthA": 1.0},
-            "I": {"ParamMouthOpenY": 0.3, "ParamMouthForm": 0.8, "ParamMouthI": 1.0},
-            "U": {"ParamMouthOpenY": 0.3, "ParamMouthForm": -0.5, "ParamMouthU": 1.0},
-            "E": {"ParamMouthOpenY": 0.5, "ParamMouthE": 1.0},
-            "O": {"ParamMouthOpenY": 0.6, "ParamMouthO": 1.0},
-            "N": {"ParamMouthOpenY": 0.0},  # 闭嘴
+            "A": {"ParamMouthOpenY": 0.8, "ParamMouthForm": 0.2},
+            "I": {"ParamMouthOpenY": 0.3, "ParamMouthForm": 0.8},
+            "U": {"ParamMouthOpenY": 0.3, "ParamMouthForm": -0.5},
+            "E": {"ParamMouthOpenY": 0.5, "ParamMouthForm": 0.4},
+            "O": {"ParamMouthOpenY": 0.6, "ParamMouthForm": -0.4},
+            "N": {"ParamMouthOpenY": 0.0, "ParamMouthForm": 0.0},  # 闭嘴
         }
         return mapping.get(mouth, mapping["N"])
 

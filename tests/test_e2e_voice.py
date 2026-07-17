@@ -49,8 +49,8 @@ async def main():
                         print(f"  <- ASR: '{p.get('text', '')[:50]}' (final={p.get('isFinal')})")
                     elif t == "llm.stream":
                         print(f"  <- LLM: '{p.get('text', '')[:50]}'")
-                    elif t == "tts.audio":
-                        print(f"  <- TTS: {p.get('durationMs', 0):.0f}ms, {len(p.get('phonemes', []))} phonemes")
+                    elif t == "tts.speech":
+                        print(f"  <- TTS: {p.get('durationMs', 0):.0f}ms, {len(p.get('entries', []))} timeline entries")
                     elif t == "live2d.control":
                         print(f"  <- LIVE2D: {p.get('command')}")
             except websockets.ConnectionClosed:
@@ -77,7 +77,7 @@ async def main():
         print("Waiting for results...")
         for _ in range(30):
             await asyncio.sleep(1)
-            if any(m["type"] == "tts.audio" for m in received):
+            if any(m["type"] == "tts.speech" for m in received):
                 print("  Got response!")
                 break
 
@@ -94,13 +94,13 @@ async def main():
         print("=" * 50)
 
         types_seen = set(m["type"] for m in received)
-        expected_types = {"asr.result", "llm.stream", "tts.audio", "live2d.control"}
+        expected_types = {"asr.result", "llm.stream", "tts.speech", "live2d.control"}
         missing = expected_types - types_seen
         if missing:
             print(f"WARNING: Missing message types: {missing}")
 
         asr_final = [m for m in received if m["type"] == "asr.result" and m["payload"].get("isFinal")]
-        tts_msgs = [m for m in received if m["type"] == "tts.audio"]
+        tts_msgs = [m for m in received if m["type"] == "tts.speech"]
         live2d = [m for m in received if m["type"] == "live2d.control"]
 
         asr_ok = len(asr_final) > 0 and len(asr_final[-1]["payload"]["text"]) > 2
