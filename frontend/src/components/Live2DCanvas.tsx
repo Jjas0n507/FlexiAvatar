@@ -324,24 +324,41 @@ const Live2DCanvas: React.FC = () => {
   }, []);
 
   // ── speak/stop 桥（useAudioPlayback 的播放队列 → 库内置 RMS 口型）──
+  //
+  // ponytail: 音频输出走 <audio>（浏览器媒体线程），不走 WebAudio 输出——
+  // 这台 AMD/Linux 机器上运行中的 AudioContext 会把 WebGL 压到 ~10 FPS
+  // 且不恢复（f03b6db 时代同一个坑）。AudioContext 永久 suspended，
+  // 只用 decodeAudioData 拿采样喂 RMS；播放位置读 el.currentTime（媒体
+  // 硬件时钟），与采样消费同源，口型结构上不漂移。
 
   useEffect(() => {
     if (loadState !== "loaded") return;
     const model = modelRef.current;
     if (!model) return;
 
-    // ponytail: 补丁库的 RMS 时钟。原版 WavFileController.update 用渲染帧
-    // deltaTime 累加当播放位置 —— 低 FPS 下与音频硬件时钟渐行渐远（越说越
-    // 不同步），且段结束后 samples 不清空（说完嘴还空动）。改为直接读
-    // audioContext.currentTime，播放位置 = 硬件时钟，结构上不会漂移。
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const wc = model.wavController as any;
-    let segStart = Infinity; // 当前段开播时的 ctx 时间；Infinity = 未开播
-    const origPlay = wc.play.bind(wc);
-    wc.play = async (audioBuffer: AudioBuffer) => {
-      segStart = model.audioContext.currentTime;
-      return origPlay(audioBuffer);
+    const el = new Audio();
+    el.preload = "auto";
+    let currentUrl: string | null = null;
+    let finishCurrent: (() => void) | null = null;
+
+    // 解码不需要 running 状态；保持 suspended 保 FPS
+    void model.audioContext?.suspend()?.catch?.(() => { /* ignore */ });
+
+    const clearSamples = () => {
+      wc.samples = null;
+      wc.rms = 0;
+      wc.previousRms = 0;
     };
+    const revokeUrl = () => {
+      if (currentUrl) {
+        URL.revokeObjectURL(currentUrl);
+        currentUrl = null;
+      }
+    };
+
+    // 重写库的 RMS 时钟：播放位置 = <audio> 媒体时钟
     wc.update = () => {
       const samples: Float32Array[] | null = wc.samples;
       if (!samples || samples.length === 0) {
@@ -349,9 +366,12 @@ const Live2DCanvas: React.FC = () => {
         wc.previousRms = 0;
         return;
       }
-      const pos = model.audioContext.currentTime - segStart; // 秒，硬件时钟
-      const goal = Math.min(Math.floor(pos * wc.sampleRate), wc.samplesPerChannel);
-      if (goal <= wc.sampleOffset) return; // 未开播或本帧无新采样
+      if (el.paused) return; // 未开播/已暂停：不消费采样
+      const goal = Math.min(
+        Math.floor(el.currentTime * wc.sampleRate),
+        wc.samplesPerChannel,
+      );
+      if (goal <= wc.sampleOffset) return;
 
       let sum = 0;
       for (const ch of samples) {
@@ -364,36 +384,51 @@ const Live2DCanvas: React.FC = () => {
       wc.previousRms = wc.rms;
       wc.sampleOffset = goal;
 
-      if (goal >= wc.samplesPerChannel) {
-        // 播放位置越过缓冲末尾：立即闭嘴，杜绝"说完嘴还动"
-        wc.samples = null;
-        wc.rms = 0;
-        wc.previousRms = 0;
-      }
+      if (goal >= wc.samplesPerChannel) clearSamples(); // 播完立即闭嘴
     };
 
     registerSpeaker({
-      speak: async (buf: ArrayBuffer) => {
+      speak: async (buf: ArrayBuffer, mime: string) => {
         const m = modelRef.current;
         if (!m?.loaded) return;
-        // Electron 自动播放策略下 AudioContext 可能 suspended
-        if (m.audioContext?.state === "suspended") {
-          try { await m.audioContext.resume(); } catch { /* ignore */ }
-        }
-        await m.inputAudio(buf, true); // 解码 + 播放 + RMS 口型；resolve = onended
+        // Blob 先建（复制字节），decodeAudioData 会 detach 原 buffer
+        const blob = new Blob([buf], { type: mime });
+        const decoded = await m.audioContext.decodeAudioData(buf);
+
+        revokeUrl();
+        currentUrl = URL.createObjectURL(blob);
+        el.src = currentUrl;
+
+        wc.numChannels = decoded.numberOfChannels;
+        wc.sampleRate = decoded.sampleRate;
+        wc.samplesPerChannel = decoded.length;
+        wc.samples = Array.from(
+          { length: decoded.numberOfChannels },
+          (_, i) => decoded.getChannelData(i),
+        );
+        wc.sampleOffset = 0;
+        wc.rms = 0;
+        wc.previousRms = 0;
+
+        await new Promise<void>((resolve) => {
+          finishCurrent = resolve;
+          el.onended = () => resolve();
+          el.onerror = () => resolve();
+          el.play().catch((e) => {
+            console.error("[Live2D] audio play failed:", e);
+            resolve();
+          });
+        });
+        finishCurrent = null;
+        clearSamples();
+        revokeUrl();
       },
       stop: () => {
-        const m = modelRef.current;
-        if (!m) return;
-        try {
-          m.stopAudio();
-          // ponytail: 库的 stopAudio 只停 sourceNode，残留 samples 会让口型继续无声空翻
-          if (m.wavController) {
-            m.wavController.samples = null;
-            (m.wavController as unknown as { rms: number; previousRms: number }).rms = 0;
-            (m.wavController as unknown as { rms: number; previousRms: number }).previousRms = 0;
-          }
-        } catch { /* ignore */ }
+        el.pause();
+        clearSamples();
+        finishCurrent?.(); // 解锁泵循环里 pending 的 speak
+        finishCurrent = null;
+        revokeUrl();
       },
     });
     registerExpressionSetter(setExpression);
@@ -401,6 +436,11 @@ const Live2DCanvas: React.FC = () => {
     return () => {
       registerSpeaker(null);
       registerExpressionSetter(null);
+      el.pause();
+      clearSamples();
+      finishCurrent?.();
+      finishCurrent = null;
+      revokeUrl();
     };
   }, [loadState, setExpression]);
 

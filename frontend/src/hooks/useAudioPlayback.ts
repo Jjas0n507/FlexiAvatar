@@ -16,13 +16,14 @@ import { wsClient } from "../services/ws-client";
 // ── 桥接口（Live2DCanvas 在模型加载后注册）────────
 export interface SpeakerBridge {
   /** 播放一段音频并驱动口型；resolve = 播放结束 */
-  speak: (buf: ArrayBuffer) => Promise<void>;
+  speak: (buf: ArrayBuffer, mime: string) => Promise<void>;
   /** 立即停止播放和口型 */
   stop: () => void;
 }
 
 interface Segment {
   buf: ArrayBuffer;
+  mime: string;
   expression: string | null;
   utteranceId: string;
 }
@@ -64,7 +65,7 @@ async function pump(): Promise<void> {
       if (seg.utteranceId === _staleUtteranceId) continue; // 打断后的迟到段
       _exprSetter?.(seg.expression ?? "neutral");
       try {
-        await _bridge.speak(seg.buf);
+        await _bridge.speak(seg.buf, seg.mime);
       } catch (e) {
         console.error("[Audio] segment playback failed (skipped):", e);
         // decode/播放失败只跳本段，泵不停
@@ -108,6 +109,7 @@ export function useAudioPlayback(): void {
         _lastUtteranceId = speech.utteranceId ?? null;
         _queue.push({
           buf: bytes.buffer,
+          mime: speech.format === "wav" ? "audio/wav" : "audio/mpeg",
           expression: speech.expressions?.[0]?.name ?? null,
           utteranceId: speech.utteranceId ?? "",
         });
