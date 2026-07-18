@@ -70,7 +70,11 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   // GPU 诊断：等价 chrome://gpu 的特性表 — 看合成/WebGL/栅格化各自是硬件还是软件
+  // whenReady 时 GPU 进程可能未就绪（全 disabled 是假象），8s 后再打一次准的
   console.log("[GPU]", JSON.stringify(app.getGPUFeatureStatus()));
+  setTimeout(() => {
+    console.log("[GPU:steady]", JSON.stringify(app.getGPUFeatureStatus()));
+  }, 8000);
 
   // 启动 Python 后端
   console.log("[Electron] Starting Python backend...");

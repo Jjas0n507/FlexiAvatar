@@ -11,6 +11,9 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- pixi-live2d-display/cubism4 在模块 import 时即检查 Live2DCubismCore 全局，
+         必须先于打包产物同步加载（WASM 异步初始化由组件内轮询等待） -->
+    <script src="/live2d/live2dcubismcore.min.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
