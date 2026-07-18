@@ -72,5 +72,6 @@ def create_tts(config: Config):
             ref_audio=config.get("tts.cosyvoice2.ref_audio", "resources/voices/ref.wav"),
             ref_text=config.get("tts.cosyvoice2.ref_text", ""),
             speed=config.get("tts.cosyvoice2.speed", 1.0),
+            fp16=config.get("tts.cosyvoice2.fp16", True),
         )
     raise ValueError(f"Unknown TTS engine: {engine}")

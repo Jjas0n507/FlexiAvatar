@@ -61,6 +61,7 @@ tts:
     ref_audio: "resources/voices/ref.wav"   # 3-10s 干净人声，16kHz+
     ref_text: ""                             # 参考音频的逐字文本
     speed: 1.0
+    fp16: true                               # gfx1030 实测 RTF 0.91（fp32 为 1.59）
   # Phase B: 流式分句 TTS（LLM 边出字边合成）
   streaming:
     min_segment_length: 15       # 首句成句最小字数

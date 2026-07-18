@@ -10,7 +10,7 @@ CosyVoice 2 适配器（本地 TTS，Apache 2.0）。
     export PYTHONPATH=/opt/CosyVoice:/opt/CosyVoice/third_party/Matcha-TTS:$PYTHONPATH
 
 模型权重首次使用时经 ModelScope 自动下载到 model_dir（挂载卷 resources/models/）。
-ROCm 注意: load_jit/load_trt/fp16 全关（torch 上 ROCm 呈现为 cuda 设备）。
+ROCm 注意: load_jit/load_trt 关；fp16 开（gfx1030 实测稳态 RTF 0.91 vs fp32 1.59）。
 """
 
 import asyncio
@@ -41,11 +41,13 @@ class CosyVoice2Adapter(BaseTTS):
         ref_audio: str = "resources/voices/ref.wav",
         ref_text: str = "",
         speed: float = 1.0,
+        fp16: bool = True,
     ):
         self._model_dir = model_dir
         self._ref_audio = ref_audio
         self._ref_text = ref_text
         self._speed = speed
+        self._fp16 = fp16
         self._model = None
         self._ref = None
         self._load_lock = asyncio.Lock()
@@ -65,7 +67,6 @@ class CosyVoice2Adapter(BaseTTS):
     def _load_blocking(self):
         try:
             from cosyvoice.cli.cosyvoice import CosyVoice2
-            from cosyvoice.utils.file_utils import load_wav
         except ImportError as e:
             raise RuntimeError(_INSTALL_HINT) from e
 
@@ -75,12 +76,27 @@ class CosyVoice2Adapter(BaseTTS):
             from modelscope import snapshot_download
             snapshot_download("iic/CosyVoice2-0.5B", local_dir=str(model_dir))
 
+        if not Path(self._ref_audio).exists():
+            raise RuntimeError(f"参考音频不存在: {self._ref_audio}")
+
         logger.info("Loading CosyVoice2 model...")
         self._model = CosyVoice2(
-            str(model_dir), load_jit=False, load_trt=False, fp16=False,
+            str(model_dir), load_jit=False, load_trt=False, fp16=self._fp16,
         )
-        self._ref = load_wav(self._ref_audio, 16000)
+        # 新版 API：prompt_wav 传文件路径，frontend 内部自行按 16k/24k 加载
+        # （其 load_wav 的 torchaudio→TorchCodec 依赖已在容器内补丁为 soundfile 直读）
+        self._ref = str(self._ref_audio)
         logger.info(f"CosyVoice2 ready (sample_rate={self._model.sample_rate})")
+
+        # 热身：首句冷启动 RTF ~3.0（MIOpen 算子搜索），跑两句预热后稳态 ~0.9。
+        # 放在加载阶段做掉，别让用户的第一句话来付这个钱。
+        import time
+        for text in ("预热第一句。", "预热第二句，多见一种长度。"):
+            t0 = time.time()
+            list(self._model.inference_zero_shot(
+                text, self._ref_text, self._ref, stream=False, speed=self._speed,
+            ))
+            logger.info(f"CosyVoice2 warmup: {time.time() - t0:.1f}s")
 
     # ── 合成 ────────────────────────────────────
 
