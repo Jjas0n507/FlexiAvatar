@@ -167,6 +167,17 @@ const Live2DCanvas: React.FC = () => {
 
         modelRef.current = model;
 
+        // GPU 诊断：llvmpipe/SwiftShader = 软渲染，就是 FPS 崩的根因
+        const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+        const dbg = gl?.getExtension("WEBGL_debug_renderer_info");
+        console.log(
+          "[Live2D] GL renderer:",
+          gl && dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : "unknown",
+        );
+        canvas.addEventListener("webglcontextlost", () =>
+          console.error("[Live2D] WebGL context LOST → 已回退软渲染"),
+        );
+
         // 自己接管渲染循环（autoAnimate:false）：每帧一次 model.update()，
         // 生命周期由 destroyed 标志控制，StrictMode 双挂载安全。FPS 计数顺带。
         const fps = { frames: 0, lastLog: performance.now() };

@@ -69,6 +69,9 @@ function createWindow(): void {
 // ── 应用生命周期 ────────────────────────────
 
 app.whenReady().then(async () => {
+  // GPU 诊断：等价 chrome://gpu 的特性表 — 看合成/WebGL/栅格化各自是硬件还是软件
+  console.log("[GPU]", JSON.stringify(app.getGPUFeatureStatus()));
+
   // 启动 Python 后端
   console.log("[Electron] Starting Python backend...");
   const started = await pythonBridge.start();
