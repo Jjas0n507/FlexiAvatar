@@ -49,11 +49,18 @@ gpu:
 
 # ── 语音合成 ────────────────────────────────
 tts:
-  engine: "edge-tts"
+  engine: "edge-tts"             # edge-tts | cosyvoice2
   edge_tts:
     voice: "zh-CN-XiaoxiaoNeural"
     speed: "+10%"
     pitch: "+0Hz"
+  # CosyVoice2 本地引擎（零样本克隆，换音色=换 ref_audio/ref_text）
+  # 依赖安装见 backend/tts/cosyvoice_adapter.py 顶部注释
+  cosyvoice2:
+    model_dir: "resources/models/CosyVoice2-0.5B"
+    ref_audio: "resources/voices/ref.wav"   # 3-10s 干净人声，16kHz+
+    ref_text: ""                             # 参考音频的逐字文本
+    speed: 1.0
   # Phase B: 流式分句 TTS（LLM 边出字边合成）
   streaming:
     min_segment_length: 15       # 首句成句最小字数

@@ -65,4 +65,12 @@ def create_tts(config: Config):
             voice=config.get("tts.edge_tts.voice", "zh-CN-XiaoxiaoNeural"),
             speed=config.get("tts.edge_tts.speed", "+10%"),
         )
+    elif engine == "cosyvoice2":
+        from backend.tts.cosyvoice_adapter import CosyVoice2Adapter
+        return CosyVoice2Adapter(
+            model_dir=config.get("tts.cosyvoice2.model_dir", "resources/models/CosyVoice2-0.5B"),
+            ref_audio=config.get("tts.cosyvoice2.ref_audio", "resources/voices/ref.wav"),
+            ref_text=config.get("tts.cosyvoice2.ref_text", ""),
+            speed=config.get("tts.cosyvoice2.speed", 1.0),
+        )
     raise ValueError(f"Unknown TTS engine: {engine}")
