@@ -19,6 +19,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from backend.config import config
+from backend.adapters import create_tts
 from backend.session.manager import SessionManager, SessionState
 from backend.tools.registry import ToolRegistry
 from backend.live2d.motion_controller import MotionController
@@ -406,6 +407,20 @@ async def startup():
     logger.info(f"已加载 {tool_count} 个工具")
     logger.info(f"WebSocket 端点: ws://{config.get('app.host', '127.0.0.1')}:{config.get('app.port', 8765)}/ws")
     logger.info("=" * 50)
+
+    # 重 TTS（CosyVoice2）后台预加载：加载+预热 ~1 分钟，不挡 /health，
+    # 用户第一句话不再付冷启动成本。适配器是进程单例，pipeline 直接复用。
+    async def _preload_tts():
+        try:
+            tts = create_tts(config)
+            ensure = getattr(tts, "_ensure_loaded", None)
+            if ensure:
+                await ensure()
+                logger.info("TTS 预加载完成")
+        except Exception as e:
+            logger.warning(f"TTS 预加载失败（首次合成时重试）: {e}")
+
+    asyncio.create_task(_preload_tts())
 
 
 @app.on_event("shutdown")

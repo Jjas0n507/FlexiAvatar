@@ -13,6 +13,17 @@
 
 from backend.config import Config
 
+# 重模型进程级共享：每个 WebSocket 客户端一条 pipeline，若各自实例化
+# funasr/whisper/CosyVoice 会重复加载（20s+）且显存翻倍。
+# VAD 有逐流内部状态、LLM 是轻量 HTTP 客户端 —— 这两类不共享。
+_shared: dict[str, object] = {}
+
+
+def _cached(key: str, build):
+    if key not in _shared:
+        _shared[key] = build()
+    return _shared[key]
+
 
 def create_vad(config: Config):
     """创建 VAD 适配器实例"""
@@ -28,19 +39,19 @@ def create_asr(config: Config):
     engine = config.get("asr.engine", "whisper")
     if engine == "whisper":
         from backend.asr.whisper_adapter import WhisperASR
-        return WhisperASR(
+        return _cached("asr:whisper", lambda: WhisperASR(
             model_size=config.get("asr.whisper.model_size", "base"),
             language="zh",
             device=config.get("asr.whisper.device", "cpu"),
             compute_type=config.get("asr.whisper.compute_type", "int8"),
             beam_size=config.get("asr.whisper.beam_size", 5),
-        )
+        ))
     elif engine == "funasr":
         from backend.asr.funasr_adapter import FunASRAdapter
-        return FunASRAdapter(
+        return _cached("asr:funasr", lambda: FunASRAdapter(
             model=config.get("asr.funasr.model", "iic/SenseVoiceSmall"),
             device=config.get("asr.funasr.device", "cpu"),
-        )
+        ))
     raise ValueError(f"Unknown ASR engine: {engine}")
 
 
@@ -67,11 +78,11 @@ def create_tts(config: Config):
         )
     elif engine == "cosyvoice2":
         from backend.tts.cosyvoice_adapter import CosyVoice2Adapter
-        return CosyVoice2Adapter(
+        return _cached("tts:cosyvoice2", lambda: CosyVoice2Adapter(
             model_dir=config.get("tts.cosyvoice2.model_dir", "resources/models/CosyVoice2-0.5B"),
             ref_audio=config.get("tts.cosyvoice2.ref_audio", "resources/voices/ref.wav"),
             ref_text=config.get("tts.cosyvoice2.ref_text", ""),
             speed=config.get("tts.cosyvoice2.speed", 1.0),
             fp16=config.get("tts.cosyvoice2.fp16", True),
-        )
+        ))
     raise ValueError(f"Unknown TTS engine: {engine}")
