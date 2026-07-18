@@ -61,7 +61,14 @@ def make_pipeline(llm: FakeLLM, tts: FakeTTS):
 
     async def on_tts_audio(payload: dict):
         sent.append(payload)
-        pipeline.notify_playback_done()  # 假前端：收到即播完
+
+        # 假前端：延迟一拍再通知播完。respond() 只认最后一段发出之后的
+        # done（发送前会 clear 掉排空间隙的中间信号），同步 set 会被清掉。
+        async def _done():
+            await asyncio.sleep(0.05)
+            pipeline.notify_playback_done()
+
+        asyncio.create_task(_done())
 
     pipeline = AudioPipeline(
         session_manager=session,

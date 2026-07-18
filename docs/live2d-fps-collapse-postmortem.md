@@ -76,6 +76,10 @@ Failed to load module: .../gio/modules/...（core20 路径）
 ## 陪葬 bug 清单（排查途中顺手揪出）
 
 1. **音频静默**：后端日志 11/11 次 `playback.done timeout` —— 语音重做后音频链路**从未真正通过**，只是所有人都在盯 FPS。E2E 探针洗清后端（mp3 魔数/协议字段全对）后给前端桥加了全链路分段日志（WS收包→入队→decode→play→ended，3115a91），此后恢复正常且口型同步。确切断点没抓到现行；日志永久保留作回归保险。
+   **2026-07-19 补记（已定案）**：CDP 活体取证抓到两个真凶，超时其实一直都在——
+   - **后端自死锁（主因）**：`handle_chat_text` 在 WS 接收循环里同步 `await respond()`，而 respond 等的 `playback.done` 只能从**被它堵死的同一个接收循环**里读出来 → 文字聊天 100% 假超时（3 条 done 一直躺在 socket 缓冲区）。语音路径因 `_process_speech` 走 `create_task` 而幸免。修复：文字路径同样 `create_task` + IDLE 门卫。
+   - **前端孤儿 socket（副因）**：StrictMode 双挂载下重复 `connect()`，旧 socket 的闭包 handler 继续喂消息（**能收**），但 `this.ws` 已易主或为 null（**不能发**）——上行静默丢失。修复：connect 幂等（CONNECTING 也不重建）+ 所有回调身份守卫 + disconnect 先易主再 close。
+   - 当时"恢复正常"只是音频下行本来就通（孤儿也能收），上行 done 从未到过后端。修复后日志史上第一次出现 `Playback confirmed by frontend`。
 2. **比心四只手**：`随机姿势.motion3.json` 把 `Paramemoji3`（笔芯手）挂 1 整整 87 秒，却把 `Paramemoji4`（正常手开关）留在 0 —— **动作文件自己忘了藏正常手**，任何播放器下都是四只手，所以"存在很久"。资产级修复：emoji4 曲线 0→1。（对照组：`笔芯.exp3.json` 作为 VTS 快捷键写法是两个参数一起动的，是正确姿势。）
 3. **害羞/哭泣表情从未显示过**：清零机制每帧把 emoji1-7 归零，pixi 更新序中我们的钩子在 expressionManager **之后** → 原生表情写完立即被抹掉。废除清零后恢复。
 

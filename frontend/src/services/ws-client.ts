@@ -40,27 +40,40 @@ export class WSClient {
   // ── 连接管理 ──────────────────────────────
 
   connect(): void {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
+    // OPEN/CONNECTING/CLOSING 一律不重建：重复 connect（如 StrictMode 双挂载）
+    // 曾造成孤儿 socket —— 它的 handler 继续喂消息（能收），但 this.ws 指向
+    // 别处或 null（不能发），playback.done 等上行全部静默丢失。
+    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) return;
     this._intentionalClose = false;
 
+    let sock: WebSocket;
     try {
-      this.ws = new WebSocket(this.url);
+      sock = new WebSocket(this.url);
     } catch (e) {
       console.error("[WS] Failed to create WebSocket:", e);
       this.scheduleReconnect();
       return;
     }
+    this.ws = sock;
 
-    this.ws.onopen = () => {
+    // 所有回调带身份守卫：this.ws 已易主的旧 socket 事件一律忽略/自闭
+    sock.onopen = () => {
+      if (this.ws !== sock) {
+        sock.close();
+        return;
+      }
       console.log("[WS] Connected");
       this._isConnected = true;
       this.currentReconnectDelay = RECONNECT_DELAY_MS;
+      this.clearReconnectTimer(); // 清掉断线期间遗留的重连定时器
       this.startHeartbeat();
       this.onConnected?.();
     };
 
-    this.ws.onclose = (event) => {
+    sock.onclose = (event) => {
+      if (this.ws !== sock) return;
       console.log(`[WS] Disconnected (code: ${event.code})`);
+      this.ws = null;
       this._isConnected = false;
       this.stopHeartbeat();
       this.onDisconnected?.();
@@ -69,12 +82,14 @@ export class WSClient {
       }
     };
 
-    this.ws.onerror = (event) => {
+    sock.onerror = (event) => {
+      if (this.ws !== sock) return;
       console.error("[WS] Error:", event);
       this.onError?.(event);
     };
 
-    this.ws.onmessage = (event) => {
+    sock.onmessage = (event) => {
+      if (this.ws !== sock) return;
       try {
         const msg: WSMessage = JSON.parse(event.data as string);
         this.dispatch(msg);
@@ -88,8 +103,9 @@ export class WSClient {
     this._intentionalClose = true;
     this.stopHeartbeat();
     this.clearReconnectTimer();
-    this.ws?.close();
-    this.ws = null;
+    const sock = this.ws;
+    this.ws = null; // 先易主再 close，旧 socket 的回调被身份守卫忽略
+    sock?.close();
     this._isConnected = false;
   }
 
@@ -218,3 +234,8 @@ export class WSClient {
 
 // 全局单例
 export const wsClient = new WSClient();
+
+// dev 排查口: 暴露到全局便于 devtools/CDP 驱动（打包版不含）
+if (import.meta.env.DEV) {
+  (globalThis as unknown as Record<string, unknown>).__wsClient = wsClient;
+}

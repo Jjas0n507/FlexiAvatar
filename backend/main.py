@@ -19,6 +19,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from backend.config import config
+from backend.adapters import create_tts
 from backend.session.manager import SessionManager, SessionState
 from backend.tools.registry import ToolRegistry
 from backend.live2d.motion_controller import MotionController
@@ -205,10 +206,24 @@ async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) 
         })
         return
 
+    # 回复中不接新文字（语音路径由状态机天然门控，这里补同等门卫）
+    if session_manager.state != SessionState.IDLE:
+        logger.info(f"chat.text 忽略（当前状态 {session_manager.state.value}）")
+        await send_to(client_id, {
+            "type": "error",
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "payload": {"code": "BUSY", "message": "正在回复中，请稍候或先打断", "recoverable": True},
+        })
+        return
+
     await session_manager.transition("vad_speech_start", reason="text_input")
     await session_manager.transition("vad_speech_end", reason="text_input")
     await session_manager.transition("processing_done", reason="text_input")
-    await pipeline.respond(text)
+    # 关键: respond() 内部要等前端 playback.done，而 done 只能从本 WS 接收循环
+    # 读出。若在此 await respond()，接收循环被堵死 → done 永远读不到 → 必超时
+    # （文字聊天曾因此 100% 假超时）。与语音路径一致，作为后台任务运行。
+    asyncio.create_task(pipeline.respond(text))
 
 
 async def handle_ping(client_id: str, payload: dict) -> None:
@@ -406,6 +421,20 @@ async def startup():
     logger.info(f"已加载 {tool_count} 个工具")
     logger.info(f"WebSocket 端点: ws://{config.get('app.host', '127.0.0.1')}:{config.get('app.port', 8765)}/ws")
     logger.info("=" * 50)
+
+    # 重 TTS（CosyVoice2）后台预加载：加载+预热 ~1 分钟，不挡 /health，
+    # 用户第一句话不再付冷启动成本。适配器是进程单例，pipeline 直接复用。
+    async def _preload_tts():
+        try:
+            tts = create_tts(config)
+            ensure = getattr(tts, "_ensure_loaded", None)
+            if ensure:
+                await ensure()
+                logger.info("TTS 预加载完成")
+        except Exception as e:
+            logger.warning(f"TTS 预加载失败（首次合成时重试）: {e}")
+
+    asyncio.create_task(_preload_tts())
 
 
 @app.on_event("shutdown")

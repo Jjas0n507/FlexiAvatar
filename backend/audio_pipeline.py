@@ -364,6 +364,9 @@ class AudioPipeline:
 
             # 等待前端播放完成（替代估算 sleep）
             if not cancel.is_set() and total_duration_ms > 0:
+                # 前端在合成间隙排空时也会发 done（RTF>1 时段间必有饥饿），
+                # 那些是中间信号；只认最后一段发出之后的 done。
+                self._playback_done.clear()
                 timeout_s = (total_duration_ms / 1000.0) * 1.5 + 2.0
                 try:
                     await asyncio.wait_for(self._playback_done.wait(), timeout=timeout_s)

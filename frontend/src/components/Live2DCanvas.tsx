@@ -437,21 +437,34 @@ const Live2DCanvas: React.FC = () => {
         m.prev = 0;
 
         await new Promise<void>((resolve) => {
-          finishCurrent = resolve;
-          el.onended = () => {
-            console.log("[Audio] ended");
+          let done = false;
+          const finish = (reason: string) => {
+            if (done) return;
+            done = true;
+            clearTimeout(watchdog);
+            if (reason === "ended") console.log("[Audio] ended");
+            else console.warn(`[Audio] finish: ${reason}`);
             resolve();
           };
-          el.onerror = () => {
-            console.error("[Audio] media error:", el.error?.code, el.error?.message);
-            resolve();
+          // 看门狗: onended 偶发丢失会永久卡死泵（后续段全部不播 = 听感截断）。
+          // 读播放头判定：还在正常推进就按剩余时长顺延（绝不切尾音），
+          // 播完/停滞才放行。
+          const checkEnd = () => {
+            if (done) return;
+            const remain = decoded.duration - el.currentTime;
+            if (!el.paused && el.currentTime > 0 && isFinite(remain) && remain > 0.05) {
+              watchdog = setTimeout(checkEnd, Math.max(remain * 1000 + 300, 250));
+            } else {
+              finish(`watchdog (onended lost? t=${el.currentTime.toFixed(2)}/${decoded.duration.toFixed(2)})`);
+            }
           };
+          let watchdog = setTimeout(checkEnd, decoded.duration * 1000 + 750);
+          finishCurrent = () => finish("stopped");
+          el.onended = () => finish("ended");
+          el.onerror = () => finish(`media error ${el.error?.code ?? "?"} ${el.error?.message ?? ""}`);
           el.play()
             .then(() => console.log("[Audio] playing"))
-            .catch((e) => {
-              console.error("[Audio] play() rejected:", e);
-              resolve();
-            });
+            .catch((e) => finish(`play() rejected: ${e}`));
         });
         finishCurrent = null;
         clearSamples();

@@ -2,8 +2,8 @@
  * TTS 音频播放 Hook（RMS 口型驱动）。
  *
  * FIFO 队列 + 泵循环：每段先应用表情，再 await speak(bytes) —
- * live2d-renderer 的 inputAudio 负责解码(MP3/WAV)、播放、每帧 RMS 驱动口型，
- * 音频和口型读同一份采样数据，结构上不可能失步。
+ * Live2DCanvas 的 speak 桥负责解码(OfflineAudioContext)、播放(<audio>)、
+ * 每帧 RMS 驱动口型；口型与播放头同源(el.currentTime)，结构上不失步。
  *
  * 队列排空 → 300ms 防抖发送 playback.done。
  * 打断（sessionState=interrupted）→ stopAll()：停音频+清队列+按 utteranceId 丢迟到段。
@@ -107,6 +107,12 @@ export function useAudioPlayback(): void {
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
         _lastUtteranceId = speech.utteranceId ?? null;
+        // 新 utterance 开始 → 丢弃队列里其它 utterance 的陈段
+        // （桥未注册的窗口期可能积压上一轮的段，恢复后不应播旧语音）
+        if (speech.utteranceId && _queue.length > 0 && _queue[0].utteranceId !== speech.utteranceId) {
+          console.log(`[Audio] dropping ${_queue.length} stale queued segment(s)`);
+          _queue.length = 0;
+        }
         console.log(
           `[Audio] enqueue seq=${speech.seq} ${bytes.length}B fmt=${speech.format} queue=${_queue.length + 1} bridge=${!!_bridge}`,
         );

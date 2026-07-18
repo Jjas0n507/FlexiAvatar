@@ -20,6 +20,11 @@ const __dirname = path.dirname(__filename);
 // 开发模式检测
 const isDev = !app.isPackaged;
 
+// dev 排查口: CDP 远程调试（读 renderer console / 远程执行），打包版无此口
+if (isDev) {
+  app.commandLine.appendSwitch("remote-debugging-port", "9223");
+}
+
 let mainWindow: BrowserWindow | null = null;
 const pythonBridge = new PythonBridge();
 
