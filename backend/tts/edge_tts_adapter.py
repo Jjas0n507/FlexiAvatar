@@ -74,7 +74,9 @@ class EdgeTTSAdapter(BaseTTS):
 
         raw_audio = b"".join(audio_chunks)
         wav_bytes, sample_rate, duration_ms = self._mp3_to_wav(raw_audio)
-        phonemes = self._boundaries_to_phonemes(sentence_boundaries, duration_ms)
+        phonemes = self._boundaries_to_phonemes(
+            sentence_boundaries, duration_ms, wav_bytes, sample_rate
+        )
 
         # Phase 1.4: 提取音量包络并注入到 phoneme
         if phonemes and wav_bytes:
@@ -174,44 +176,57 @@ class EdgeTTSAdapter(BaseTTS):
 
     @staticmethod
     def _boundaries_to_phonemes(
-        boundaries: list[dict], total_duration_ms: float
+        boundaries: list[dict],
+        total_duration_ms: float,
+        wav_bytes: bytes = b"",
+        sample_rate: int = 24000,
     ) -> list[Phoneme]:
         """
         将 SentenceBoundary 转为口型时间线。
 
-        Edge-TTS v7+ 只提供句子级边界，不提供词级。
-        因此策略：获取每句话的起始/结束时间，在句子内均匀分配口型。
+        Edge-TTS v7+ 只提供句子级边界。使用 syllable boundary detection
+        从音频波形中检测音节起始点，匹配到每个字符，获得更准的口型时序。
+        检测信心低时 fallback 到均匀分布。
         """
-        phonemes = []
-
+        # 1. 收集所有边界中的文字
+        all_chars: list[str] = []
         for sb in boundaries:
-            # 100ns → ms
-            start_ms = (sb["offset"] / 10000.0) if sb["offset"] else 0.0
-            dur_100ns = sb["duration"] if sb["duration"] else 0
-            end_ms = start_ms + (dur_100ns / 10000.0)
-
             text = sb.get("text", "").strip()
-            if not text:
-                continue
+            for c in text:
+                if c.strip() and '一' <= c <= '鿿':
+                    all_chars.append(c)
 
-            # 为句子中的每个字生成一个口型帧 (均匀分布)
-            chars = [c for c in text if c.strip() and '一' <= c <= '鿿']
-            if not chars:
-                continue
+        if not all_chars:
+            return []
 
-            char_duration = (end_ms - start_ms) / len(chars)
+        # 2. 尝试音节检测
+        aligned = None
+        if wav_bytes:
+            try:
+                from backend.audio.syllable_detector import (
+                    detect_syllable_onsets,
+                    align_characters_to_onsets,
+                )
+                onsets = detect_syllable_onsets(wav_bytes, sample_rate)
+                aligned = align_characters_to_onsets(
+                    all_chars, onsets, total_duration_ms, fallback="uniform"
+                )
+            except Exception:
+                pass  # 音节检测失败时用均匀分布
 
-            for i, char in enumerate(chars):
-                char_start = start_ms + i * char_duration
-                char_end = char_start + char_duration * 0.85  # 留 15% 过渡
-                mouth = EdgeTTSAdapter._char_to_mouth(char)
+        if aligned is None:
+            aligned = _uniform_char_timing(all_chars, total_duration_ms)
 
-                phonemes.append(Phoneme(
-                    phoneme=mouth,
-                    start_ms=round(char_start, 1),
-                    end_ms=round(char_end, 1),
-                    char=char,
-                ))
+        # 3. 构建 Phoneme 列表
+        phonemes = []
+        for char, start_ms, end_ms in aligned:
+            mouth = EdgeTTSAdapter._char_to_mouth(char)
+            phonemes.append(Phoneme(
+                phoneme=mouth,
+                start_ms=round(start_ms, 1),
+                end_ms=round(end_ms, 1),
+                char=char,
+            ))
 
         return phonemes
 
@@ -232,3 +247,25 @@ class EdgeTTSAdapter(BaseTTS):
             pass
 
         return "E"  # 默认中等开口
+
+
+# ── 模块级辅助 ────────────────────────────────────
+
+def _uniform_char_timing(
+    chars: list[str], total_duration_ms: float
+) -> list[tuple[str, float, float]]:
+    """
+    ponytail: 均匀分配字符时间（音节检测失败时的 fallback）。
+    保留 15% 的间隙作为字符间过渡。
+    """
+    if not chars:
+        return []
+    char_dur = total_duration_ms / len(chars)
+    return [
+        (
+            c,
+            round(i * char_dur, 1),
+            round((i + 0.85) * char_dur, 1),
+        )
+        for i, c in enumerate(chars)
+    ]
