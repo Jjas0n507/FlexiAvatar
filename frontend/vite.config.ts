@@ -46,6 +46,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // pixi.js@6 引用 Node 'url'；electron-renderer 插件会把它外部化成
+      // require("url")，nodeIntegration:false 下 require 不存在 → 崩。
+      // 指到 browserify shim（alias 优先级高于插件外部化）。
+      url: path.resolve(__dirname, 'node_modules/url/url.js'),
     },
   },
 })
