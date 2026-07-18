@@ -33,8 +33,15 @@ const MotionPriority = {
 const CUBISM_CORE_PATH = "/live2d/live2dcubismcore.min.js";
 
 const FALLBACK_MODEL_PATH = "/live2d/有马加奈/有马加奈.model3.json";
-const FALLBACK_EMOJI_PARAMS = ["Paramemoji1", "Paramemoji2", "Paramemoji6", "Paramemoji7"];
 const FALLBACK_IDLE_EXPRESSIONS = ["neutral", "happy", "thinking", "surprised"];
+
+// Fallback 表情（无 profile 映射时）：标准参数持久覆写，切换时整体替换
+const FALLBACK_EXPRESSION_PARAMS: Record<string, Record<string, number>> = {
+  surprised: { ParamEyeLOpen: 1.2, ParamEyeROpen: 1.2, ParamBrowLY: 0.5, ParamBrowRY: 0.5 },
+  happy: { ParamEyeLSmile: 0.6, ParamEyeRSmile: 0.6 },
+  sad: { ParamBrowLY: -0.4, ParamBrowRY: -0.4, ParamEyeLSmile: -0.2, ParamEyeRSmile: -0.2 },
+  thinking: { ParamBrowLX: -0.2, ParamBrowRX: 0.2 },
+};
 
 /** 从 profile 获取模型路径，不存在时 fallback */
 function getModelPath(profile: ModelProfile | null): string {
@@ -86,9 +93,11 @@ const Live2DCanvas: React.FC = () => {
   const autoBehaviorTimerRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   // ── 参数写入通道（init effect 装填，beforeModelUpdate 消费）──
+  // 注意：pixi 每帧 loadParameters 回滚参数 → 覆写必须每帧重写才可见；
+  // 反之，不再写的参数下一帧自动还原（motion/expression 各归其位），
+  // 因此不需要"清零"机制 — 清零反而会碾掉原生表情和动作里的 emoji 曲线。
   const setParamRef = useRef<(id: string, v: number, w?: number) => void>(() => {});
-  const overridesRef = useRef<Record<string, number>>({}); // 持久参数（emoji 类），每帧重写
-  const oneShotRef = useRef<Array<[string, number]>>([]); // 一次性 nudge（标准参数，写一帧）
+  const overridesRef = useRef<Record<string, number>>({}); // 持久参数覆写，每帧重写，整体替换
   const lipSyncIdsRef = useRef<string[]>(["ParamMouthOpenY"]);
   const exprDefsRef = useRef<Array<{ Name: string; File?: string }>>([]);
   const fitRef = useRef<(() => void) | null>(null);
@@ -196,10 +205,6 @@ const Live2DCanvas: React.FC = () => {
         internal.on("beforeModelUpdate", () => {
           const setP = setParamRef.current;
           for (const [id, v] of Object.entries(overridesRef.current)) setP(id, v);
-          if (oneShotRef.current.length > 0) {
-            for (const [id, v] of oneShotRef.current) setP(id, v);
-            oneShotRef.current = [];
-          }
           // 口型：播放位置 = <audio> 媒体时钟，消费解码采样窗口
           const m = mouthRef.current;
           let rms = 0;
@@ -347,63 +352,32 @@ const Live2DCanvas: React.FC = () => {
     const model = modelRef.current;
     if (!model) return;
 
-    const profile = profileRef.current;
-    const exprDef = profile?.expressions?.[name];
-    const extraParams = profile?.parameters?.extra ?? FALLBACK_EMOJI_PARAMS;
-
-    // 基线：extra（emoji 类）参数全部归零（持久覆写）
-    const zeros: Record<string, number> = {};
-    for (const p of extraParams) zeros[p] = 0;
+    const exprDef = profileRef.current?.expressions?.[name];
 
     if (exprDef) {
       if (exprDef.type === "native" && exprDef.name) {
         if (applyNativeExpression(exprDef.name)) {
-          overridesRef.current = zeros;
+          overridesRef.current = {};
           return;
         }
-        // 原生不可用时降级到 params
+        // 原生不可用时降级到 fallback
       }
       if (exprDef.type === "params" && exprDef.params) {
-        overridesRef.current = { ...zeros, ...exprDef.params };
+        resetNativeExpression(); // 之前可能有原生表情挂着
+        overridesRef.current = { ...exprDef.params };
         return;
       }
       if (exprDef.type === "native" && !exprDef.name) {
-        // neutral：清 extra + 复位原生表情
-        overridesRef.current = zeros;
+        // neutral：清覆写 + 复位原生表情
+        overridesRef.current = {};
         resetNativeExpression();
         return;
       }
     }
 
-    // ── Fallback: 硬编码表情（一次性 nudge 标准参数，眨眼/动作可自然接管）──
-    overridesRef.current = zeros;
-    switch (name) {
-      case "surprised":
-        oneShotRef.current.push(
-          ["ParamEyeLOpen", 1.2],
-          ["ParamEyeROpen", 1.2],
-          ["ParamBrowLY", 0.5],
-          ["ParamBrowRY", 0.5],
-        );
-        break;
-      case "happy":
-        oneShotRef.current.push(["ParamEyeLSmile", 0.6], ["ParamEyeRSmile", 0.6]);
-        break;
-      case "sad":
-        oneShotRef.current.push(
-          ["ParamBrowLY", -0.4],
-          ["ParamBrowRY", -0.4],
-          ["ParamEyeLSmile", -0.2],
-          ["ParamEyeRSmile", -0.2],
-        );
-        break;
-      case "thinking":
-        oneShotRef.current.push(["ParamBrowLX", -0.2], ["ParamBrowRX", 0.2]);
-        break;
-      case "neutral":
-        resetNativeExpression();
-        break;
-    }
+    // ── Fallback: 硬编码标准参数覆写（neutral 及未知名 → 全清）──
+    resetNativeExpression();
+    overridesRef.current = { ...(FALLBACK_EXPRESSION_PARAMS[name] ?? {}) };
   }, [applyNativeExpression, resetNativeExpression]);
 
   // ── speak/stop 桥（useAudioPlayback 播放队列 → RMS 口型）──
@@ -437,9 +411,17 @@ const Live2DCanvas: React.FC = () => {
     registerSpeaker({
       speak: async (buf: ArrayBuffer, mime: string) => {
         if (!modelRef.current) return;
+        console.log(`[Audio] speak: ${buf.byteLength}B ${mime}`);
         // Blob 先建（复制字节），decodeAudioData 会 detach 原 buffer
         const blob = new Blob([buf], { type: mime });
-        const decoded = await decodeCtx.decodeAudioData(buf);
+        let decoded: AudioBuffer;
+        try {
+          decoded = await decodeCtx.decodeAudioData(buf);
+        } catch (e) {
+          console.error("[Audio] decode failed:", e);
+          throw e; // pump 捕获后跳本段
+        }
+        console.log(`[Audio] decoded: ${decoded.duration.toFixed(2)}s @${decoded.sampleRate}Hz`);
 
         revokeUrl();
         currentUrl = URL.createObjectURL(blob);
@@ -456,12 +438,20 @@ const Live2DCanvas: React.FC = () => {
 
         await new Promise<void>((resolve) => {
           finishCurrent = resolve;
-          el.onended = () => resolve();
-          el.onerror = () => resolve();
-          el.play().catch((e) => {
-            console.error("[Live2D] audio play failed:", e);
+          el.onended = () => {
+            console.log("[Audio] ended");
             resolve();
-          });
+          };
+          el.onerror = () => {
+            console.error("[Audio] media error:", el.error?.code, el.error?.message);
+            resolve();
+          };
+          el.play()
+            .then(() => console.log("[Audio] playing"))
+            .catch((e) => {
+              console.error("[Audio] play() rejected:", e);
+              resolve();
+            });
         });
         finishCurrent = null;
         clearSamples();
@@ -476,6 +466,7 @@ const Live2DCanvas: React.FC = () => {
       },
     });
     registerExpressionSetter(setExpression);
+    console.log("[Audio] speaker bridge registered");
 
     return () => {
       registerSpeaker(null);

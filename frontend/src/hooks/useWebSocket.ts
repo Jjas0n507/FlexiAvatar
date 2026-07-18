@@ -108,6 +108,7 @@ export function useWebSocket() {
     unsubs.push(
       wsClient.on("tts.audio", (msg: WSMessage) => {
         const payload = msg.payload as unknown as TTSSpeechPayload;
+        console.log(`[WS] tts.audio seq=${payload.seq} fmt=${payload.format} b64len=${payload.audio?.length ?? 0}`);
         setTtsSpeech(payload);
       })
     );

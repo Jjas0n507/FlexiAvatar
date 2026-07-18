@@ -107,6 +107,9 @@ export function useAudioPlayback(): void {
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
         _lastUtteranceId = speech.utteranceId ?? null;
+        console.log(
+          `[Audio] enqueue seq=${speech.seq} ${bytes.length}B fmt=${speech.format} queue=${_queue.length + 1} bridge=${!!_bridge}`,
+        );
         _queue.push({
           buf: bytes.buffer,
           mime: speech.format === "wav" ? "audio/wav" : "audio/mpeg",
