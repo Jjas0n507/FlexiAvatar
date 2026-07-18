@@ -5,12 +5,16 @@
 
 ## 当前优先级
 
+### 🆕 新需求（2026-07-19 用户提出）
+
+- [ ] **美化页面、优化交互**: UI 视觉打磨 + 交互体验（可与 Phase 6 的对话气泡/设置面板合并推进）
+- [ ] **记忆、性格设置**: 跨会话长期记忆 + 人设/性格可配置（system prompt 模板化，后续接设置 UI）
+- [ ] **配置必需工具**: 时间、日期等内置工具落地（`backend/tools/builtin/` 目录待建，工具注册/调用链路已就绪）
+- [ ] **说话不能带表情等**: LLM 回复混入 emoji/颜文字/Markdown 符号会被 TTS 念出、干扰分句与口型 → system prompt 约束 + TTS 合成前文本清洗双保险
+
 ### 🔴 高优先级
 
 - [ ] **用户听感验收**: CosyVoice 音色是否满意（换音色 = 换 3-10s 参考音频 + 文本，config 两行）；段间死寂是否可接受；比心是否两只手；情绪句是否出害羞/哭泣表情
-- [ ] **Dockerfile 固化 CosyVoice 层**: 当前容器内手工安装（clone `/opt/CosyVoice` + pip 依赖 + `cosyvoice.pth` + `setuptools<81` + `load_wav` soundfile 补丁），**recreate 即失**。需写进 Dockerfile
-- [ ] **依赖清理**: 删 `pydub`/`pypinyin`（requirements.txt + Dockerfile）；删 `live2d-renderer` 依赖 + `frontend/scripts/patch-live2d.cjs`（已换 pixi-live2d-display）
-- [ ] **push `phase-cosyvoice-tuning` + PR**（以上完成后一并收尾）
 
 ### 🟡 中优先级
 
@@ -34,6 +38,7 @@
 - [x] playback.done 定案：后端接收循环自死锁 + 前端孤儿 socket + speak 看门狗（d04cf27）
 - [x] 比心四只手（motion3.json 资产修复）、害羞/哭泣表情恢复（废除清零机制）
 - [x] dev 排查口：Electron CDP :9223 + `window.__wsClient`（仅 isDev）
+- [x] Dockerfile 固化 CosyVoice 层 + 依赖清理（pydub/pypinyin/live2d-renderer）+ README（PR #5）
 
 ### 下一阶段（Phase 5 — 工具系统）
 
