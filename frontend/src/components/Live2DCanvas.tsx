@@ -142,6 +142,8 @@ const Live2DCanvas: React.FC = () => {
           cubismCorePath: CUBISM_CORE_PATH,
           scale: 1.2,
           autoInteraction: false,   // ponytail: 关闭鼠标跟随
+          autoAnimate: false,       // 库内置循环用模块级全局 id 存 rAF 句柄，StrictMode
+                                    // 双实例下 destroy() 会随机杀错循环 → 自己跑循环
           randomMotion: true,       // ponytail: 随机动作循环
           enablePhysics: true,
           enableEyeblink: true,
@@ -165,14 +167,12 @@ const Live2DCanvas: React.FC = () => {
 
         modelRef.current = model;
 
-        // ponytail: library's autoAnimate (default: true) already runs
-        // model.update() every frame via its own rAF. We MUST NOT call
-        // model.update() ourselves — double-render kills FPS on AMD GPU.
-        // FPS monitoring: lightweight rAF counter, no model.update().
-
+        // 自己接管渲染循环（autoAnimate:false）：每帧一次 model.update()，
+        // 生命周期由 destroyed 标志控制，StrictMode 双挂载安全。FPS 计数顺带。
         const fps = { frames: 0, lastLog: performance.now() };
-        const fpsCounter = () => {
+        const renderLoop = () => {
           if (destroyed) return;
+          model.update();
           fps.frames++;
           const now = performance.now();
           if (now - fps.lastLog >= 3000) {
@@ -180,9 +180,9 @@ const Live2DCanvas: React.FC = () => {
             fps.frames = 0;
             fps.lastLog = now;
           }
-          animFrameRef.current = requestAnimationFrame(fpsCounter);
+          animFrameRef.current = requestAnimationFrame(renderLoop);
         };
-        fpsCounter();
+        renderLoop();
 
         // ★ 再处理动作 — 读可用分组，不在则跳过
         motionGroupsRef.current = getAvailableMotions(model);
@@ -327,6 +327,50 @@ const Live2DCanvas: React.FC = () => {
 
   useEffect(() => {
     if (loadState !== "loaded") return;
+    const model = modelRef.current;
+    if (!model) return;
+
+    // ponytail: 补丁库的 RMS 时钟。原版 WavFileController.update 用渲染帧
+    // deltaTime 累加当播放位置 —— 低 FPS 下与音频硬件时钟渐行渐远（越说越
+    // 不同步），且段结束后 samples 不清空（说完嘴还空动）。改为直接读
+    // audioContext.currentTime，播放位置 = 硬件时钟，结构上不会漂移。
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wc = model.wavController as any;
+    let segStart = Infinity; // 当前段开播时的 ctx 时间；Infinity = 未开播
+    const origPlay = wc.play.bind(wc);
+    wc.play = async (audioBuffer: AudioBuffer) => {
+      segStart = model.audioContext.currentTime;
+      return origPlay(audioBuffer);
+    };
+    wc.update = () => {
+      const samples: Float32Array[] | null = wc.samples;
+      if (!samples || samples.length === 0) {
+        wc.rms = 0;
+        wc.previousRms = 0;
+        return;
+      }
+      const pos = model.audioContext.currentTime - segStart; // 秒，硬件时钟
+      const goal = Math.min(Math.floor(pos * wc.sampleRate), wc.samplesPerChannel);
+      if (goal <= wc.sampleOffset) return; // 未开播或本帧无新采样
+
+      let sum = 0;
+      for (const ch of samples) {
+        for (let i = wc.sampleOffset; i < goal; i++) sum += ch[i] * ch[i];
+      }
+      const n = (goal - wc.sampleOffset) * samples.length;
+      const rms = Math.min(1, Math.sqrt(sum / n) * 5);
+      const k = wc.smoothingFactor > 0 ? wc.smoothingFactor : 1;
+      wc.rms = wc.previousRms * (1 - k) + rms * k;
+      wc.previousRms = wc.rms;
+      wc.sampleOffset = goal;
+
+      if (goal >= wc.samplesPerChannel) {
+        // 播放位置越过缓冲末尾：立即闭嘴，杜绝"说完嘴还动"
+        wc.samples = null;
+        wc.rms = 0;
+        wc.previousRms = 0;
+      }
+    };
 
     registerSpeaker({
       speak: async (buf: ArrayBuffer) => {
@@ -344,7 +388,11 @@ const Live2DCanvas: React.FC = () => {
         try {
           m.stopAudio();
           // ponytail: 库的 stopAudio 只停 sourceNode，残留 samples 会让口型继续无声空翻
-          if (m.wavController) m.wavController.samples = null;
+          if (m.wavController) {
+            m.wavController.samples = null;
+            (m.wavController as unknown as { rms: number; previousRms: number }).rms = 0;
+            (m.wavController as unknown as { rms: number; previousRms: number }).previousRms = 0;
+          }
         } catch { /* ignore */ }
       },
     });
