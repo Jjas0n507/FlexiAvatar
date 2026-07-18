@@ -52,6 +52,15 @@ export interface Phoneme {
   endMs: number;
 }
 
+/** 后端 tts.audio 消息的 payload */
+export interface TTSSpeechPayload {
+  audio: string;              // base64 WAV
+  format: "wav" | "mp3";
+  sampleRate: number;
+  durationMs: number;
+  phonemes: Phoneme[];
+}
+
 export interface Live2DControlPayload {
   command: "lip_sync" | "expression" | "motion" | "idle" | "reset" | "interrupt" | "state" | "timeline";
   lipSyncFrames?: LipSyncFrame[];

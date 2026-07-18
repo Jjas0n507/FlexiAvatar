@@ -104,9 +104,9 @@ export function useWebSocket() {
       })
     );
 
-    // TTS speech (合并后的 audio + timeline)
+    // TTS audio (Phase A: 修正消息类型与后端一致)
     unsubs.push(
-      wsClient.on("tts.speech", (msg: WSMessage) => {
+      wsClient.on("tts.audio", (msg: WSMessage) => {
         const payload = msg.payload as unknown as TTSSpeechPayload;
         setTtsSpeech(payload);
       })

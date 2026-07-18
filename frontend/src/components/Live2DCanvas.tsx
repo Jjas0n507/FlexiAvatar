@@ -593,53 +593,26 @@ const Live2DCanvas: React.FC = () => {
     return unsub;
   }, [applyLipSync, playMotion, setExpression]);
 
-  // ── TTS Speech → rAF 口型同步 + 表情调度 ───────
+  // ── TTS Speech → rAF 口型同步 (AudioContext 时钟) ───────
 
   useEffect(() => {
     const unsub = useAgentStore.subscribe(
       (state) => state.ttsSpeech,
       (speech) => {
-        if (!speech?.entries?.length) return;
-        console.log("[Live2D] ttsSpeech subscriber fired, entries:", speech.entries.length);
+        if (!speech?.phonemes?.length) return;
+        console.log("[Live2D] ttsSpeech subscriber fired, phonemes:", speech.phonemes.length);
 
-        // 提取口型帧 → rAF 驱动
-        const lipFrames: LipSyncFrame[] = [];
-        for (const entry of speech.entries) {
-          if (entry.type === "mouth") {
-            lipFrames.push({
-              timeMs: entry.timeMs,
-              mouth: entry.mouth ?? "N",
-              params: entry.params ?? {},
-            });
-          }
-        }
+        // phonemes → LipSyncFrame[] (Phase A: 后端发 phonemes, 非 entries)
+        const lipFrames: LipSyncFrame[] = speech.phonemes.map((p) => ({
+          timeMs: p.startMs,
+          mouth: p.phoneme,
+          params: {},  // 由 applyLipSync 通过 getMouthShape 查表
+        }));
         console.log("[Live2D] lip frames:", lipFrames.length, "playbackStartTime:", audioEngine.playbackStartTime);
         if (lipFrames.length > 0) {
           applyLipSync(lipFrames);
         }
-
-        // 提取表情事件并调度
-        lipSyncTimerRef.current = lipSyncTimerRef.current.filter((t) => {
-          clearTimeout(t);
-          return false;
-        });
-        for (const entry of speech.entries) {
-          if (entry.type === "expression" && entry.expression?.name) {
-            const delay = Math.max(0, entry.timeMs);
-            const { name, durationMs, fadeOutMs } = entry.expression;
-            const timer = setTimeout(() => {
-              setExpression(name);
-              if (durationMs > 0) {
-                const closeTimer = setTimeout(
-                  () => setExpression("neutral"),
-                  durationMs + (fadeOutMs ?? 300)
-                );
-                lipSyncTimerRef.current.push(closeTimer);
-              }
-            }, delay);
-            lipSyncTimerRef.current.push(timer);
-          }
-        }
+        // 表情事件走 live2d.control "timeline" 路径，此处不重复处理
       }
     );
     return unsub;
