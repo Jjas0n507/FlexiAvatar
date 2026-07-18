@@ -41,51 +41,33 @@ export interface LLMStreamPayload {
 
 export interface TTSAudioPayload {
   sentence: string;
-  phonemes: Phoneme[];
   format: string;    // "wav" | "mp3"
   // audio data follows as binary
 }
 
-export interface Phoneme {
-  phoneme: string;
-  startMs: number;
-  endMs: number;
+/** tts.audio 附带的表情事件（分段开头应用） */
+export interface TTSExpression {
+  name: string;
+  durationMs: number;
 }
 
-/** 后端 tts.audio 消息的 payload */
+/** 后端 tts.audio 消息的 payload（一句话一段音频，口型由前端 RMS 驱动） */
 export interface TTSSpeechPayload {
-  audio: string;              // base64 WAV
+  utteranceId: string;        // 一次 LLM 回复一个 id，打断后丢弃迟到段
+  seq: number;                // 句序号
+  audio: string;              // base64 音频（format 指定编码）
   format: "wav" | "mp3";
-  sampleRate: number;
   durationMs: number;
-  phonemes: Phoneme[];
+  text?: string;
+  expressions: TTSExpression[];
 }
 
 export interface Live2DControlPayload {
-  command: "lip_sync" | "expression" | "motion" | "idle" | "reset" | "interrupt" | "state" | "timeline";
-  lipSyncFrames?: LipSyncFrame[];
+  command: "expression" | "motion" | "interrupt" | "reset" | "state";
   expression?: ExpressionParams;
   motion?: MotionParams;
   state?: string;
   idleEnabled?: boolean;
-  audioStartTime?: number;
-  // timeline command (Phase 4+): unified mouth + expression timeline
-  entries?: TimelineEntry[];
-  audio_start_time?: number;
-}
-
-export interface TimelineEntry {
-  type: "mouth" | "expression";
-  timeMs: number;
-  mouth?: string;
-  params?: Record<string, number>;
-  expression?: ExpressionParams;
-}
-
-export interface LipSyncFrame {
-  timeMs: number;
-  mouth: string;      // A, I, U, E, O, N
-  params: Record<string, number>;
 }
 
 export interface ExpressionParams {

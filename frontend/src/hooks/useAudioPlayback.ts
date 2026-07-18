@@ -1,68 +1,49 @@
 /**
- * TTS 音频播放 Hook (HTMLAudioElement 驱动)。
+ * TTS 音频播放 Hook（RMS 口型驱动）。
  *
- * 监听 store 的 ttsSpeech 状态，用 <audio> 元素播放音频并记录
- * playbackStartTime 供 Live2D rAF 同步口型。
+ * FIFO 队列 + 泵循环：每段先应用表情，再 await speak(bytes) —
+ * live2d-renderer 的 inputAudio 负责解码(MP3/WAV)、播放、每帧 RMS 驱动口型，
+ * 音频和口型读同一份采样数据，结构上不可能失步。
  *
- * Phase B: 音频自然结束后发送 playback.done 通知后端。
- *
- * ponytail: 用 <audio> 替代 WebAudio API (decodeAudioData + AudioBufferSourceNode)。
- *           浏览器媒体栈独立线程处理音频，不与 WebGL 渲染争主线程，
- *           避免 Linux/AMD 上 AudioContext + WebGL 竞争导致 60→7 FPS 暴跌。
- *           保留 AudioContext 仅用于 currentTime 时钟。
+ * 队列排空 → 300ms 防抖发送 playback.done。
+ * 打断（sessionState=interrupted）→ stopAll()：停音频+清队列+按 utteranceId 丢迟到段。
  */
 
 import { useEffect } from "react";
 import { useAgentStore } from "../stores/agent-store";
 import { wsClient } from "../services/ws-client";
 
+// ── 桥接口（Live2DCanvas 在模型加载后注册）────────
+export interface SpeakerBridge {
+  /** 播放一段音频并驱动口型；resolve = 播放结束 */
+  speak: (buf: ArrayBuffer) => Promise<void>;
+  /** 立即停止播放和口型 */
+  stop: () => void;
+}
+
+interface Segment {
+  buf: ArrayBuffer;
+  expression: string | null;
+  utteranceId: string;
+}
+
 // ── 模块级单例 ────────────────────────────────────
-let _audioCtx: AudioContext | null = null;
-let _audioEl: HTMLAudioElement | null = null;
-let _playbackStartTime = 0;
-let _currentBlobUrl: string | null = null;
+let _bridge: SpeakerBridge | null = null;
+let _exprSetter: ((name: string) => void) | null = null;
+const _queue: Segment[] = [];
+let _pumping = false;
+let _staleUtteranceId: string | null = null;
+let _lastUtteranceId: string | null = null;
 let _doneTimer: ReturnType<typeof setTimeout> | null = null;
 
-function getAudioContext(): AudioContext | null {
-  if (_audioCtx) return _audioCtx;
-  try {
-    const Ctx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!Ctx) return null;
-    _audioCtx = new Ctx();
-  } catch {
-    return null;
-  }
-  return _audioCtx;
+export function registerSpeaker(bridge: SpeakerBridge | null): void {
+  _bridge = bridge;
+  if (bridge && _queue.length > 0) void pump(); // 模型晚于音频就绪时补泵
 }
 
-function getAudioEl(): HTMLAudioElement {
-  if (!_audioEl) {
-    _audioEl = new Audio();
-    _audioEl.preload = "auto";
-  }
-  return _audioEl;
+export function registerExpressionSetter(fn: ((name: string) => void) | null): void {
+  _exprSetter = fn;
 }
-
-// ponytail: 全局导出 audioEngine 供 Live2DCanvas rAF 同步
-export const audioEngine = {
-  get audioCtx(): AudioContext | null {
-    return _audioCtx;
-  },
-  get playbackStartTime(): number {
-    return _playbackStartTime;
-  },
-  stop(): void {
-    const el = _audioEl;
-    if (el) {
-      el.pause();
-      el.currentTime = 0;
-    }
-    _playbackStartTime = 0;
-  },
-};
 
 function schedulePlaybackDone(): void {
   if (_doneTimer) clearTimeout(_doneTimer);
@@ -73,79 +54,82 @@ function schedulePlaybackDone(): void {
   }, 300);
 }
 
+async function pump(): Promise<void> {
+  if (_pumping) return;
+  _pumping = true;
+  try {
+    while (_queue.length > 0) {
+      if (!_bridge) return; // 模型未就绪：保留队列，registerSpeaker 时补泵
+      const seg = _queue.shift()!;
+      if (seg.utteranceId === _staleUtteranceId) continue; // 打断后的迟到段
+      _exprSetter?.(seg.expression ?? "neutral");
+      try {
+        await _bridge.speak(seg.buf);
+      } catch (e) {
+        console.error("[Audio] segment playback failed (skipped):", e);
+        // decode/播放失败只跳本段，泵不停
+      }
+    }
+    schedulePlaybackDone();
+  } finally {
+    _pumping = false;
+    if (_bridge && _queue.length > 0) void pump(); // 泵收尾瞬间的新入队
+  }
+}
+
+/** 停止播放：清队列 + 停音频/口型 + 表情复位；之后同 utteranceId 的迟到段直接丢弃 */
+export function stopAll(): void {
+  _staleUtteranceId = _lastUtteranceId;
+  _queue.length = 0;
+  _bridge?.stop();
+  _exprSetter?.("neutral");
+  if (_doneTimer) {
+    clearTimeout(_doneTimer);
+    _doneTimer = null;
+  }
+}
+
 export function useAudioPlayback(): void {
   useEffect(() => {
-    const unsub = useAgentStore.subscribe(
+    const unsubTts = useAgentStore.subscribe(
       (state) => state.ttsSpeech,
-      async (speech) => {
+      (speech) => {
         if (!speech?.audio) return;
+        if (speech.utteranceId && speech.utteranceId === _staleUtteranceId) {
+          console.log("[Audio] stale segment dropped:", speech.utteranceId, speech.seq);
+          return;
+        }
 
+        // base64 → ArrayBuffer
+        const binary = atob(speech.audio);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+        _lastUtteranceId = speech.utteranceId ?? null;
+        _queue.push({
+          buf: bytes.buffer,
+          expression: speech.expressions?.[0]?.name ?? null,
+          utteranceId: speech.utteranceId ?? "",
+        });
         if (_doneTimer) {
           clearTimeout(_doneTimer);
           _doneTimer = null;
         }
+        void pump();
+      }
+    );
 
-        console.log("[Audio] ttsSpeech received, phonemes:", speech.phonemes?.length, "durationMs:", speech.durationMs);
-
-        // 确保 AudioContext 存在（仅用作时钟源）
-        const ctx = getAudioContext();
-        if (!ctx) {
-          console.warn("[Audio] No AudioContext, skipping");
-          return;
-        }
-
-        if (ctx.state === "suspended") {
-          try { await ctx.resume(); } catch { /* ignore */ }
-        }
-
-        // 停止前一段音频
-        audioEngine.stop();
-
-        // 释放旧 blob URL
-        if (_currentBlobUrl) {
-          URL.revokeObjectURL(_currentBlobUrl);
-          _currentBlobUrl = null;
-        }
-
-        try {
-          // base64 → Blob → Object URL
-          const binary = atob(speech.audio);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-          const blob = new Blob([bytes.buffer], { type: "audio/wav" });
-          _currentBlobUrl = URL.createObjectURL(blob);
-
-          const el = getAudioEl();
-          el.src = _currentBlobUrl;
-
-          // ponytail: HTMLAudioElement 播放，浏览器媒体线程处理
-          await el.play();
-          _playbackStartTime = ctx.currentTime;
-          console.log("[Audio] playback started via <audio>, playbackStartTime:", _playbackStartTime);
-
-          el.onended = () => {
-            console.log("[Audio] playback ended (natural)");
-            schedulePlaybackDone();
-          };
-        } catch (e) {
-          console.error("[Audio] playback failed:", e);
-        }
+    const unsubState = useAgentStore.subscribe(
+      (state) => state.sessionState,
+      (state) => {
+        if (state === "interrupted") stopAll();
       }
     );
 
     return () => {
-      unsub();
-      audioEngine.stop();
-      if (_currentBlobUrl) {
-        URL.revokeObjectURL(_currentBlobUrl);
-        _currentBlobUrl = null;
-      }
-      if (_doneTimer) {
-        clearTimeout(_doneTimer);
-        _doneTimer = null;
-      }
+      unsubTts();
+      unsubState();
+      stopAll();
     };
   }, []);
 }
