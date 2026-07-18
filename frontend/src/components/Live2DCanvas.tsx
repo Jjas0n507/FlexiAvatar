@@ -1,20 +1,27 @@
 /**
- * Live2D 渲染画布组件。
+ * Live2D 渲染画布组件（pixi-live2d-display + PIXI 6，amadeus 同款栈）。
  *
- * 使用 live2d-renderer 库加载 Cubism 模型，处理 WebSocket 传来的
- * 表情、动作指令。内置呼吸、自动眨眼、物理模拟。
+ * 渲染层由 live2d-renderer 置换而来：其动作系统每次起动作全量重解析
+ * motion3.json（实测 motion 90ms/帧 + 每秒几十 MB 分配），多次修补无果。
  *
- * 口型: 库内置 RMS 音量驱动（enableLipsync + inputAudio），
- *       经 registerSpeaker 桥接给 useAudioPlayback 的播放队列。
+ * 口型: <audio> 媒体线程播放（本机任何 running AudioContext 都会拖死渲染，
+ *       解码用 OfflineAudioContext）+ 解码采样窗口 RMS，经 internalModel 的
+ *       beforeModelUpdate 钩子写 LipSync 组参数（动作已应用、核心求值前）。
  */
 
 import React, { useRef, useEffect, useCallback, useState } from "react";
-import { Live2DCubismModel } from "live2d-renderer";
+import * as PIXI from "pixi.js";
+import { Live2DModel, config as l2dConfig } from "pixi-live2d-display/cubism4";
 import { useAgentStore } from "../stores/agent-store";
 import { registerSpeaker, registerExpressionSetter } from "../hooks/useAudioPlayback";
 import type { Live2DControlPayload, ModelProfile } from "../types";
 
-// MotionPriority enum 值 (live2d-renderer 导出为 type，运行时用数值)
+// pixi-live2d-display 内部引用全局 PIXI（Ticker/utils）
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(window as any).PIXI = PIXI;
+l2dConfig.sound = false; // 禁动作自带音效：不开输出流、不与 TTS 口型抢状态
+
+// 与 WS 控制协议一致的数值优先级（同 pixi-live2d-display MotionPriority）
 const MotionPriority = {
   None: 0,
   Idle: 1,
@@ -23,10 +30,8 @@ const MotionPriority = {
 } as const;
 
 // ── 配置 ────────────────────────────────────────
-// ponytail: CDN WASM 404s, use local copy. JS contains wasm asm.js fallback.
 const CUBISM_CORE_PATH = "/live2d/live2dcubismcore.min.js";
 
-// 默认硬编码值（profile 为 null 时的 fallback）
 const FALLBACK_MODEL_PATH = "/live2d/有马加奈/有马加奈.model3.json";
 const FALLBACK_EMOJI_PARAMS = ["Paramemoji1", "Paramemoji2", "Paramemoji6", "Paramemoji7"];
 const FALLBACK_IDLE_EXPRESSIONS = ["neutral", "happy", "thinking", "surprised"];
@@ -34,7 +39,6 @@ const FALLBACK_IDLE_EXPRESSIONS = ["neutral", "happy", "thinking", "surprised"];
 /** 从 profile 获取模型路径，不存在时 fallback */
 function getModelPath(profile: ModelProfile | null): string {
   if (profile) {
-    // model3_path 是相对于模型目录的，拼接完整路径
     const dir = profile.model3_path.includes("/")
       ? profile.model3_path.replace(/[^/]+$/, "")
       : "/live2d/有马加奈/";
@@ -43,9 +47,9 @@ function getModelPath(profile: ModelProfile | null): string {
   return FALLBACK_MODEL_PATH;
 }
 
-// ponytail: live2d-renderer 的 loadCubismCore 只等 script.onload，
-// 但 Emscripten WASM 初始化是异步的。需要对 Live2DCubismCore 做轮询。
+// live2dcubismcore 的 Emscripten 初始化是异步的，轮询等待
 async function ensureCubismCoreLoaded(src: string): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const win = window as any;
   if (win.Live2DCubismCore) return;
   if (!document.querySelector(`script[src="${src}"]`)) {
@@ -57,7 +61,6 @@ async function ensureCubismCoreLoaded(src: string): Promise<void> {
       document.body.appendChild(s);
     });
   }
-  // poll for Emscripten async init to complete
   for (let i = 0; i < 100; i++) {
     if (win.Live2DCubismCore) return;
     await new Promise((r) => setTimeout(r, 100));
@@ -65,43 +68,40 @@ async function ensureCubismCoreLoaded(src: string): Promise<void> {
   throw new Error("Live2DCubismCore not defined after 10s");
 }
 
-// ponytail: live2d-renderer 的 setParameter 运行时可用但 .d.ts 未完整声明
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ModelWithSetParam = Live2DCubismModel & {
-  setParameter: (name: string, value: number) => void;
-};
-
-// ── 辅助：获取可用动作组名 ──────────────────────
-
-function getAvailableMotions(model: Live2DCubismModel): string[] {
-  const ids = model.getMotions();
-  // 提取分组名: "害羞嘴.motion3.json_0" → "害羞嘴.motion3.json"
-  const groups = new Set<string>();
-  for (const id of ids) {
-    const lastUnderscore = id.lastIndexOf("_");
-    if (lastUnderscore > 0) {
-      groups.add(id.substring(0, lastUnderscore));
-    }
-  }
-  return [...groups];
-}
+const norm = (s: string) => s.replace(/\.exp3\.json$/, "");
 
 // ── 组件 ────────────────────────────────────────
 
 const Live2DCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const modelRef = useRef<Live2DCubismModel | null>(null);
-  const animFrameRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const modelRef = useRef<Live2DModel | null>(null);
+  const animFrameRef = useRef<number>(0);
 
   const [loadState, setLoadState] = useState<"loading" | "loaded" | "error">("loading");
   const [loadError, setLoadError] = useState<string>("");
 
-  // 缓存可用的动作组名
   const motionGroupsRef = useRef<string[]>([]);
-
-  // ModelProfile（从后端 live2d.profile 消息接收，null 时 fallback 硬编码）
   const profileRef = useRef<ModelProfile | null>(null);
+  const autoBehaviorTimerRef = useRef<ReturnType<typeof setInterval>>(undefined);
+
+  // ── 参数写入通道（init effect 装填，beforeModelUpdate 消费）──
+  const setParamRef = useRef<(id: string, v: number, w?: number) => void>(() => {});
+  const overridesRef = useRef<Record<string, number>>({}); // 持久参数（emoji 类），每帧重写
+  const oneShotRef = useRef<Array<[string, number]>>([]); // 一次性 nudge（标准参数，写一帧）
+  const lipSyncIdsRef = useRef<string[]>(["ParamMouthOpenY"]);
+  const exprDefsRef = useRef<Array<{ Name: string; File?: string }>>([]);
+  const fitRef = useRef<(() => void) | null>(null);
+
+  // 口型状态：bridge 写入，beforeModelUpdate 消费（同一媒体时钟：el.currentTime）
+  const mouthRef = useRef<{
+    el: HTMLAudioElement | null;
+    samples: Float32Array[] | null;
+    sampleRate: number;
+    perChannel: number;
+    offset: number;
+    prev: number;
+  }>({ el: null, samples: null, sampleRate: 0, perChannel: 0, offset: 0, prev: 0 });
 
   // 订阅 profile 更新
   useEffect(() => {
@@ -114,66 +114,54 @@ const Live2DCanvas: React.FC = () => {
         }
       }
     );
-    // 初始化时也读取一次
     const initial = useAgentStore.getState().modelProfile;
     if (initial) profileRef.current = initial;
     return unsub;
   }, []);
 
-  // ponytail: 自主表情/动作定时器
-  const autoBehaviorTimerRef = useRef<ReturnType<typeof setInterval>>(undefined);
-
   // ── 模型初始化 ────────────────────────────────
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
 
     let destroyed = false;
+    let app: PIXI.Application | null = null;
 
     const initModel = async () => {
       try {
-        // 先等 CubismCore 脚本加载并完成初始化（Emscripten WASM init 是异步的）
         await ensureCubismCoreLoaded(CUBISM_CORE_PATH);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         console.log("[Live2D] CubismCore ready:", typeof (window as any).Live2DCubismCore);
 
-        // 创建模型实例
-        const model = new Live2DCubismModel(canvas, {
-          cubismCorePath: CUBISM_CORE_PATH,
-          scale: 1.2,
-          autoInteraction: false,   // ponytail: 关闭鼠标跟随
-          autoAnimate: false,       // 库内置循环用模块级全局 id 存 rAF 句柄，StrictMode
-                                    // 双实例下 destroy() 会随机杀错循环 → 自己跑循环
-          randomMotion: true,       // ponytail: 随机动作循环
-          enablePhysics: true,
-          enableEyeblink: true,
-          enableBreath: true,
-          enableLipsync: true,      // 库内置 RMS 口型（model3.json LipSync 组）
-          enableMotion: true,       // ponytail: 启用动作自动循环
-          enableExpression: true,   // ponytail: 启用表情系统
-          enableMovement: false,    // ponytail: 关闭拖拽驱动头部运动
-          // 这台机器上渲染进程里任何 running AudioContext 都会把 WebGL 压到
-          // ~12FPS（与设备开关/是否在播无关，pactl 实证 Electron 空闲也持流）。
-          // 注入 OfflineAudioContext 顶掉库默认 new AudioContext()：decodeAudioData
-          // 照常，永不碰声卡、永不被 autoplay 手势自动 resume；StrictMode
-          // 幽灵实例（destroy 不关 context）也一并无害化。
-          audioContext: new OfflineAudioContext(1, 1, 44100) as unknown as AudioContext,
+        app = new PIXI.Application({
+          view: canvas,
+          backgroundAlpha: 0,
+          antialias: true,
+          autoDensity: true,
+          resolution: window.devicePixelRatio || 1,
+          resizeTo: container,
         });
 
-        // 加载模型
         const modelPath = getModelPath(profileRef.current);
         console.log("[Live2D] Loading model...", modelPath);
-        await model.load(modelPath);
+        const model = await Live2DModel.from(modelPath, {
+          autoInteract: false,
+          autoUpdate: false, // 我们自己在 ticker 里驱动 update（时钟自持原则）
+        });
         console.log("[Live2D] Model loaded:", modelPath);
 
         if (destroyed) {
           model.destroy();
+          app.destroy(false, { children: true, texture: true, baseTexture: true });
           return;
         }
 
         modelRef.current = model;
+        app.stage.addChild(model);
 
-        // GPU 诊断：llvmpipe/SwiftShader = 软渲染，就是 FPS 崩的根因
+        // GPU 诊断：llvmpipe/SwiftShader = 软渲染
         const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
         const dbg = gl?.getExtension("WEBGL_debug_renderer_info");
         console.log(
@@ -181,52 +169,87 @@ const Live2DCanvas: React.FC = () => {
           gl && dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : "unknown",
         );
         canvas.addEventListener("webglcontextlost", () =>
-          console.error("[Live2D] WebGL context LOST → 已回退软渲染"),
+          console.error("[Live2D] WebGL context LOST"),
         );
 
-        // 临时诊断：拆解 update() 内部耗时（定位 110ms/帧 + 40MB/s 分配来源）
-        const prof: Record<string, number> = {};
-        const counts: Record<string, number> = {};
+        // ── 原始 core 参数通道（绕过 CubismId 句柄，纯字符串索引）──
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const wrap = (obj: any, key: string, label: string) => {
-          const orig = obj?.[key];
-          if (typeof orig !== "function") return;
-          obj[key] = (...args: unknown[]) => {
-            const t0 = performance.now();
-            const r = orig.apply(obj, args);
-            prof[label] = (prof[label] ?? 0) + (performance.now() - t0);
-            counts[label] = (counts[label] ?? 0) + 1;
-            return r;
-          };
+        const internal = model.internalModel as any;
+        const core = internal.coreModel;
+        const rawIds: string[] = core.getModel().parameters.ids;
+        setParamRef.current = (id, v, w = 1) => {
+          const i = rawIds.indexOf(id);
+          if (i >= 0) core.setParameterValueByIndex(i, v, w);
         };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const anyModel = model as any;
-        wrap(anyModel, "updateCamera", "camera");
-        wrap(anyModel, "updateProjection", "projection");
-        wrap(anyModel, "resize", "resize");
-        wrap(anyModel.webGLRenderer, "prepare", "glPrepare");
-        wrap(anyModel.webGLRenderer, "draw", "glDraw");
-        wrap(anyModel.motionController, "update", "motion");
-        wrap(anyModel.expressionController, "update", "expression");
-        wrap(anyModel.physics, "evaluate", "physics");
-        wrap(anyModel.breath, "updateParameters", "breath");
-        wrap(anyModel.model, "update", "core");
 
-        // 自己接管渲染循环（autoAnimate:false）：每帧一次 model.update()，
-        // 生命周期由 destroyed 标志控制，StrictMode 双挂载安全。
-        // 插桩：FPS | 裸 rAF（判定是全进程被饿还是 update 变慢）| update 耗时 | 堆
+        // model3.json 的 LipSync 组 / 表情表 / 动作组
+        const groups = (internal.settings?.groups ?? []) as Array<{ Name: string; Ids: string[] }>;
+        const lipIds = groups.find((g) => g.Name === "LipSync")?.Ids ?? [];
+        lipSyncIdsRef.current = lipIds.length > 0 ? lipIds : ["ParamMouthOpenY"];
+        exprDefsRef.current = internal.settings?.expressions ?? [];
+        motionGroupsRef.current = Object.keys(internal.settings?.motions ?? {});
+        console.log("[Live2D] Available motions:", motionGroupsRef.current);
+        console.log("[Live2D] Available expressions:", exprDefsRef.current.map((e) => e.Name));
+        console.log("[Live2D] LipSync params:", lipSyncIdsRef.current);
+
+        // ── 参数写入点：动作已应用、coreModel.update 之前 ──
+        internal.on("beforeModelUpdate", () => {
+          const setP = setParamRef.current;
+          for (const [id, v] of Object.entries(overridesRef.current)) setP(id, v);
+          if (oneShotRef.current.length > 0) {
+            for (const [id, v] of oneShotRef.current) setP(id, v);
+            oneShotRef.current = [];
+          }
+          // 口型：播放位置 = <audio> 媒体时钟，消费解码采样窗口
+          const m = mouthRef.current;
+          let rms = 0;
+          if (m.samples && m.el && !m.el.paused) {
+            const goal = Math.min(Math.floor(m.el.currentTime * m.sampleRate), m.perChannel);
+            if (goal > m.offset) {
+              let sum = 0;
+              for (const ch of m.samples) {
+                for (let i = m.offset; i < goal; i++) sum += ch[i] * ch[i];
+              }
+              const n = (goal - m.offset) * m.samples.length;
+              const inst = Math.min(1, Math.sqrt(sum / n) * 5);
+              rms = m.prev + (inst - m.prev) * 0.5; // 指数平滑
+              m.offset = goal;
+              if (goal >= m.perChannel) m.samples = null; // 播完闭嘴
+            } else {
+              rms = m.prev; // 媒体时钟同刻内保持
+            }
+          }
+          m.prev = rms;
+          for (const id of lipSyncIdsRef.current) setP(id, rms);
+        });
+
+        // ── 适配容器 ──
+        const fit = () => {
+          const w = container.clientWidth;
+          const h = container.clientHeight;
+          if (!w || !h || !internal.height) return;
+          const s = (h / internal.height) * 1.2; // 与旧版 scale 1.2 视觉接近
+          model.scale.set(s);
+          model.anchor.set(0.5, 0.5);
+          model.position.set(w / 2, h / 2);
+        };
+        fitRef.current = fit;
+        fit();
+
+        // ── ticker：update + 插桩（FPS | 裸 rAF | update 耗时 | 堆）──
         const fps = { frames: 0, lastLog: performance.now(), updMs: 0 };
         const bare = { frames: 0 };
         const bareLoop = () => {
           if (destroyed) return;
           bare.frames++;
-          requestAnimationFrame(bareLoop);
+          animFrameRef.current = requestAnimationFrame(bareLoop);
         };
-        requestAnimationFrame(bareLoop);
-        const renderLoop = () => {
-          if (destroyed) return;
+        animFrameRef.current = requestAnimationFrame(bareLoop);
+
+        app.ticker.add(() => {
+          if (destroyed || !app) return;
           const t0 = performance.now();
-          model.update();
+          model.update(app.ticker.deltaMS);
           fps.updMs += performance.now() - t0;
           fps.frames++;
           const now = performance.now();
@@ -234,44 +257,20 @@ const Live2DCanvas: React.FC = () => {
             const secs = (now - fps.lastLog) / 1000;
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const heap = (performance as any).memory?.usedJSHeapSize as number | undefined;
-            const top = Object.entries(prof)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 4)
-              .map(([k, v]) => `${k} ${(v / Math.max(1, fps.frames)).toFixed(1)}ms×${counts[k]}`)
-              .join(", ");
             console.log(
               `[Live2D] FPS: ${Math.round(fps.frames / secs)}` +
                 ` | bare rAF: ${Math.round(bare.frames / secs)}` +
                 ` | update: ${(fps.updMs / Math.max(1, fps.frames)).toFixed(1)}ms` +
-                (heap ? ` | heap: ${Math.round(heap / 1048576)}MB` : "") +
-                ` | ${top}`,
+                (heap ? ` | heap: ${Math.round(heap / 1048576)}MB` : ""),
             );
-            for (const k of Object.keys(prof)) prof[k] = 0;
-            for (const k of Object.keys(counts)) counts[k] = 0;
             fps.frames = 0;
             fps.updMs = 0;
             bare.frames = 0;
             fps.lastLog = now;
           }
-          animFrameRef.current = requestAnimationFrame(renderLoop);
-        };
-        renderLoop();
+        });
 
-        // ★ 再处理动作 — 读可用分组，不在则跳过
-        motionGroupsRef.current = getAvailableMotions(model);
-        console.log("[Live2D] Available motions:", motionGroupsRef.current);
-        console.log("[Live2D] Available expressions:", model.getExpressions());
-
-        if (motionGroupsRef.current.length > 0) {
-          model.startRandomMotion(
-            null, // null = 随机分组
-            MotionPriority.Idle
-          );
-          console.log("[Live2D] Started idle motion");
-        } else {
-          console.log("[Live2D] No motions found, using default pose");
-        }
-
+        // 空闲动作：库内置 idleMotionGroup="Idle" 自动循环，无需手动启动
         setLoadState("loaded");
       } catch (err) {
         console.error("[Live2D] Init error:", err);
@@ -288,24 +287,19 @@ const Live2DCanvas: React.FC = () => {
       destroyed = true;
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = 0;
-      modelRef.current?.destroy();
+      fitRef.current = null;
       modelRef.current = null;
+      // children:true 连同 model 一起销毁；false = 不销毁 canvas DOM
+      app?.destroy(false, { children: true, texture: true, baseTexture: true });
+      app = null;
     };
   }, []);
 
-  // ── 画布尺寸自适应 ────────────────────────────
+  // ── 画布尺寸自适应（renderer 由 resizeTo 处理，这里只重排模型）──
 
   useEffect(() => {
-    const resizeObserver = new ResizeObserver(() => {
-      const model = modelRef.current;
-      if (!model?.loaded) return;
-      model.needsResize = true;
-    });
-
-    if (containerRef.current) {
-      resizeObserver.observe(containerRef.current);
-    }
-
+    const resizeObserver = new ResizeObserver(() => fitRef.current?.());
+    if (containerRef.current) resizeObserver.observe(containerRef.current);
     return () => resizeObserver.disconnect();
   }, []);
 
@@ -314,114 +308,124 @@ const Live2DCanvas: React.FC = () => {
   const playMotion = useCallback(
     (group: string, index: number, priority: number = MotionPriority.Normal) => {
       const model = modelRef.current;
-      if (!model?.loaded) return;
-      model.stopMotions();
-      model.startMotion(group, index, priority);
+      if (!model) return;
+      if (priority >= MotionPriority.Force) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (model.internalModel as any).motionManager.stopAllMotions();
+      }
+      void model.motion(group, index, priority);
     },
     []
   );
 
-  // ── 表情切换（优先使用 profile，无 profile 时 fallback 硬编码）──
+  const stopMotions = useCallback(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (modelRef.current?.internalModel as any)?.motionManager.stopAllMotions();
+  }, []);
+
+  // ── 表情切换（优先 profile，无 profile 时 fallback 硬编码）──
+
+  const applyNativeExpression = useCallback((name: string): boolean => {
+    const model = modelRef.current;
+    if (!model) return false;
+    const hit = exprDefsRef.current.find(
+      (d) =>
+        norm(d.Name) === norm(name) ||
+        (d.File ? norm(d.File.split("/").pop() ?? "") === norm(name) : false),
+    );
+    if (!hit) return false;
+    void model.expression(hit.Name);
+    return true;
+  }, []);
+
+  const resetNativeExpression = useCallback(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (modelRef.current?.internalModel as any)?.motionManager?.expressionManager?.resetExpression?.();
+  }, []);
 
   const setExpression = useCallback((name: string) => {
     const model = modelRef.current;
-    if (!model?.loaded) return;
+    if (!model) return;
 
     const profile = profileRef.current;
     const exprDef = profile?.expressions?.[name];
+    const extraParams = profile?.parameters?.extra ?? FALLBACK_EMOJI_PARAMS;
+
+    // 基线：extra（emoji 类）参数全部归零（持久覆写）
+    const zeros: Record<string, number> = {};
+    for (const p of extraParams) zeros[p] = 0;
 
     if (exprDef) {
       if (exprDef.type === "native" && exprDef.name) {
-        // 原生 .exp3.json 表情
-        const available = model.getExpressions();
-        if (available.includes(exprDef.name)) {
-          model.setExpression(exprDef.name);
+        if (applyNativeExpression(exprDef.name)) {
+          overridesRef.current = zeros;
           return;
         }
-        // 原生表情不可用时降级到 params
+        // 原生不可用时降级到 params
       }
       if (exprDef.type === "params" && exprDef.params) {
-        // 参数直设：先重置 extra 参数
-        const m = model as unknown as ModelWithSetParam;
-        const extraParams = profile?.parameters?.extra ?? FALLBACK_EMOJI_PARAMS;
-        for (const p of extraParams) {
-          m.setParameter(p, 0);
-        }
-        // 设置表情参数
-        for (const [key, value] of Object.entries(exprDef.params)) {
-          m.setParameter(key, value);
-        }
+        overridesRef.current = { ...zeros, ...exprDef.params };
         return;
       }
-      // type=native 但 name=null → neutral，只重置 extra
       if (exprDef.type === "native" && !exprDef.name) {
-        const m = model as unknown as ModelWithSetParam;
-        const extraParams = profile?.parameters?.extra ?? FALLBACK_EMOJI_PARAMS;
-        for (const p of extraParams) {
-          m.setParameter(p, 0);
-        }
+        // neutral：清 extra + 复位原生表情
+        overridesRef.current = zeros;
+        resetNativeExpression();
         return;
       }
     }
 
-    // ── Fallback: 硬编码表情逻辑（profile 为 null 或表情未定义时）──
-    const m = model as unknown as ModelWithSetParam;
-    const emojiParams = FALLBACK_EMOJI_PARAMS;
-    for (const p of emojiParams) {
-      m.setParameter(p, 0);
-    }
-
+    // ── Fallback: 硬编码表情（一次性 nudge 标准参数，眨眼/动作可自然接管）──
+    overridesRef.current = zeros;
     switch (name) {
       case "surprised":
-        m.setParameter("ParamEyeLOpen", 1.2);
-        m.setParameter("ParamEyeROpen", 1.2);
-        m.setParameter("ParamBrowLY", 0.5);
-        m.setParameter("ParamBrowRY", 0.5);
+        oneShotRef.current.push(
+          ["ParamEyeLOpen", 1.2],
+          ["ParamEyeROpen", 1.2],
+          ["ParamBrowLY", 0.5],
+          ["ParamBrowRY", 0.5],
+        );
         break;
       case "happy":
-        m.setParameter("ParamEyeLSmile", 0.6);
-        m.setParameter("ParamEyeRSmile", 0.6);
+        oneShotRef.current.push(["ParamEyeLSmile", 0.6], ["ParamEyeRSmile", 0.6]);
         break;
       case "sad":
-        m.setParameter("ParamBrowLY", -0.4);
-        m.setParameter("ParamBrowRY", -0.4);
-        m.setParameter("ParamEyeLSmile", -0.2);
-        m.setParameter("ParamEyeRSmile", -0.2);
+        oneShotRef.current.push(
+          ["ParamBrowLY", -0.4],
+          ["ParamBrowRY", -0.4],
+          ["ParamEyeLSmile", -0.2],
+          ["ParamEyeRSmile", -0.2],
+        );
         break;
       case "thinking":
-        m.setParameter("ParamBrowLX", -0.2);
-        m.setParameter("ParamBrowRX", 0.2);
+        oneShotRef.current.push(["ParamBrowLX", -0.2], ["ParamBrowRX", 0.2]);
         break;
-      // neutral: 不做任何操作
+      case "neutral":
+        resetNativeExpression();
+        break;
     }
-  }, []);
+  }, [applyNativeExpression, resetNativeExpression]);
 
-  // ── speak/stop 桥（useAudioPlayback 的播放队列 → 库内置 RMS 口型）──
+  // ── speak/stop 桥（useAudioPlayback 播放队列 → RMS 口型）──
   //
-  // ponytail: 音频输出走 <audio>（浏览器媒体线程），不走 WebAudio 输出。
-  // model.audioContext 是注入的 OfflineAudioContext，只做 decodeAudioData
-  // 拿采样喂 RMS；播放位置读 el.currentTime（媒体硬件时钟），与采样
-  // 消费同源，口型结构上不漂移。全应用零 running AudioContext。
+  // 音频输出走 <audio>（媒体线程）；解码用 OfflineAudioContext（纯内存，
+  // 永不开输出流）。播放位置与采样消费同源（el.currentTime），结构上不漂移。
 
   useEffect(() => {
     if (loadState !== "loaded") return;
-    const model = modelRef.current;
-    if (!model) return;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const wc = model.wavController as any;
-    // 带音频的动作启动时库会调 wavController.start() 覆写采样状态，
-    // 会踩掉正在播的 TTS 口型数据；动作音效不需要 → no-op
-    wc.start = () => { /* no-op */ };
     const el = new Audio();
     el.preload = "auto";
+    const mouth = mouthRef.current; // 稳定模块对象，非 DOM 节点
+    mouth.el = el;
+    const decodeCtx = new OfflineAudioContext(1, 1, 44100);
     let currentUrl: string | null = null;
     let finishCurrent: (() => void) | null = null;
 
     const clearSamples = () => {
-      wc.samples = null;
-      wc.rms = 0;
-      wc.previousRms = 0;
+      mouth.samples = null;
+      mouth.offset = 0;
+      mouth.prev = 0;
     };
     const revokeUrl = () => {
       if (currentUrl) {
@@ -430,57 +434,25 @@ const Live2DCanvas: React.FC = () => {
       }
     };
 
-    // 重写库的 RMS 时钟：播放位置 = <audio> 媒体时钟
-    wc.update = () => {
-      const samples: Float32Array[] | null = wc.samples;
-      if (!samples || samples.length === 0) {
-        wc.rms = 0;
-        wc.previousRms = 0;
-        return;
-      }
-      if (el.paused) return; // 未开播/已暂停：不消费采样
-      const goal = Math.min(
-        Math.floor(el.currentTime * wc.sampleRate),
-        wc.samplesPerChannel,
-      );
-      if (goal <= wc.sampleOffset) return;
-
-      let sum = 0;
-      for (const ch of samples) {
-        for (let i = wc.sampleOffset; i < goal; i++) sum += ch[i] * ch[i];
-      }
-      const n = (goal - wc.sampleOffset) * samples.length;
-      const rms = Math.min(1, Math.sqrt(sum / n) * 5);
-      const k = wc.smoothingFactor > 0 ? wc.smoothingFactor : 1;
-      wc.rms = wc.previousRms * (1 - k) + rms * k;
-      wc.previousRms = wc.rms;
-      wc.sampleOffset = goal;
-
-      if (goal >= wc.samplesPerChannel) clearSamples(); // 播完立即闭嘴
-    };
-
     registerSpeaker({
       speak: async (buf: ArrayBuffer, mime: string) => {
-        const m = modelRef.current;
-        if (!m?.loaded) return;
+        if (!modelRef.current) return;
         // Blob 先建（复制字节），decodeAudioData 会 detach 原 buffer
         const blob = new Blob([buf], { type: mime });
-        const decoded = await m.audioContext.decodeAudioData(buf);
+        const decoded = await decodeCtx.decodeAudioData(buf);
 
         revokeUrl();
         currentUrl = URL.createObjectURL(blob);
         el.src = currentUrl;
 
-        wc.numChannels = decoded.numberOfChannels;
-        wc.sampleRate = decoded.sampleRate;
-        wc.samplesPerChannel = decoded.length;
-        wc.samples = Array.from(
-          { length: decoded.numberOfChannels },
-          (_, i) => decoded.getChannelData(i),
+        const m = mouthRef.current;
+        m.sampleRate = decoded.sampleRate;
+        m.perChannel = decoded.length;
+        m.samples = Array.from({ length: decoded.numberOfChannels }, (_, i) =>
+          decoded.getChannelData(i),
         );
-        wc.sampleOffset = 0;
-        wc.rms = 0;
-        wc.previousRms = 0;
+        m.offset = 0;
+        m.prev = 0;
 
         await new Promise<void>((resolve) => {
           finishCurrent = resolve;
@@ -513,10 +485,11 @@ const Live2DCanvas: React.FC = () => {
       finishCurrent?.();
       finishCurrent = null;
       revokeUrl();
+      mouth.el = null;
     };
   }, [loadState, setExpression]);
 
-  // ── 自主行为定时器 ────────────────────────────
+  // ── 自主表情定时器 ────────────────────────────
 
   useEffect(() => {
     if (loadState !== "loaded") return;
@@ -525,11 +498,10 @@ const Live2DCanvas: React.FC = () => {
       const profile = profileRef.current;
       const idleExprs = profile?.idle?.expression_cycle ?? FALLBACK_IDLE_EXPRESSIONS;
       const [minInterval, maxInterval] = profile?.idle?.expression_interval ?? [5.0, 12.0];
-      // ponytail: 使用 profile 的空闲间隔或默认 5-12 秒
       const delay = (minInterval + Math.random() * (maxInterval - minInterval)) * 1000;
       autoBehaviorTimerRef.current = setTimeout(() => {
         const expr = idleExprs[Math.floor(Math.random() * idleExprs.length)];
-        console.log("[Live2D] idle expression:", expr); // 与 FPS 衰减时点做相关性对照
+        console.log("[Live2D] idle expression:", expr);
         setExpression(expr);
         scheduleNext();
       }, delay);
@@ -560,26 +532,18 @@ const Live2DCanvas: React.FC = () => {
 
           case "motion":
             if (control.motion) {
-              playMotion(
-                control.motion.group,
-                control.motion.index,
-                control.motion.priority
-              );
+              playMotion(control.motion.group, control.motion.index, control.motion.priority);
             }
             break;
 
           case "interrupt":
             // 音频/口型停止由 useAudioPlayback 的 sessionState 订阅处理
-            modelRef.current?.stopMotions();
+            stopMotions();
             setExpression("surprised");
             break;
 
           case "reset":
-            modelRef.current?.stopMotions();
-            // 恢复到待机动作
-            if (motionGroupsRef.current.length > 0) {
-              modelRef.current?.startRandomMotion(null, MotionPriority.Idle);
-            }
+            stopMotions(); // 库会自动回到 Idle 组循环
             break;
         }
       },
@@ -587,7 +551,7 @@ const Live2DCanvas: React.FC = () => {
     );
 
     return unsub;
-  }, [playMotion, setExpression]);
+  }, [playMotion, setExpression, stopMotions]);
 
   // ── 会话状态变化 → Live2D 表情 ────────────────
 
