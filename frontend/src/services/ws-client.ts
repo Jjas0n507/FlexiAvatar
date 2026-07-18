@@ -126,6 +126,10 @@ export class WSClient {
     this.send("user.interrupt");
   }
 
+  sendPlaybackDone(): void {
+    this.send("playback.done");
+  }
+
   // ── 消息订阅 ──────────────────────────────
 
   on(type: string, handler: MessageHandler): () => void {

@@ -49,14 +49,25 @@ gpu:
 
 # ── 语音合成 ────────────────────────────────
 tts:
-  engine: "edge-tts"
+  engine: "edge-tts"             # edge-tts | cosyvoice2
   edge_tts:
     voice: "zh-CN-XiaoxiaoNeural"
     speed: "+10%"
     pitch: "+0Hz"
-  chattts:
-    seed: 42
-    temperature: 0.3
+  # CosyVoice2 本地引擎（零样本克隆，换音色=换 ref_audio/ref_text）
+  # 依赖安装见 backend/tts/cosyvoice_adapter.py 顶部注释
+  cosyvoice2:
+    model_dir: "resources/models/CosyVoice2-0.5B"
+    ref_audio: "resources/voices/ref.wav"   # 3-10s 干净人声，16kHz+
+    ref_text: ""                             # 参考音频的逐字文本
+    speed: 1.0
+    fp16: true                               # gfx1030 实测 RTF 0.91（fp32 为 1.59）
+  # Phase B: 流式分句 TTS（LLM 边出字边合成）
+  streaming:
+    min_segment_length: 15       # 首句成句最小字数
+    first_segment_punc: "，,。！？!?；;"   # 首句允许逗号切分（压低首句延迟）
+    rest_segment_punc: "。！？!?；;"
+    max_concurrent_synthesis: 2  # 并发 TTS 任务上限
 
 # ── 大语言模型 ──────────────────────────────
 llm:
@@ -102,10 +113,6 @@ tools:
     - "calculate"
     - "web_search"
   max_tool_rounds: 5
-
-# ── 调试/诊断 ────────────────────────────────
-debug:
-  lip_sync_profiling: false      # 开启后前端回传口型采样，后端对比时间线并输出诊断日志
 
 # ── 对话 ─────────────────────────────────────
 conversation:

@@ -8,11 +8,16 @@
 - AudioPipeline 管理单个对话会话的完整生命周期
 - 通过回调将结果推送到 WebSocket 客户端
 - 可被 SessionManager 的 interrupt 事件取消
+- respond() 是语音/文字共用的 speak 管线：
+  LLM 流 → 分句 → 有界并发 TTS → 按 seq 有序发送 → 等前端 playback.done
 """
 
 import asyncio
+import base64
+import contextlib
 import logging
 import time
+import uuid
 from typing import Callable, Awaitable
 
 import numpy as np
@@ -20,10 +25,9 @@ import numpy as np
 from backend.config import config
 from backend.session.manager import SessionManager, SessionState
 from backend.adapters import create_vad, create_asr, create_llm, create_tts
-from backend.tts.base import TTSResult
+from backend.audio.segmenter import Segmenter
 from backend.live2d.motion_controller import MotionController
 from backend.llm.base import Message
-from backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger("pipeline")
 
@@ -41,7 +45,7 @@ class AudioPipeline:
         self,
         session_manager: SessionManager,
         motion_controller: MotionController | None = None,
-        on_tts_audio: Callable[[TTSResult], Awaitable[None]] | None = None,
+        on_tts_audio: Callable[[dict], Awaitable[None]] | None = None,
         on_live2d_control: Callable[[dict], Awaitable[None]] | None = None,
         on_asr_result: Callable[[str, bool], Awaitable[None]] | None = None,
         on_llm_stream: Callable[[str, bool, bool], Awaitable[None]] | None = None,
@@ -61,8 +65,8 @@ class AudioPipeline:
 
         # 对话历史 (保留上下文)
         self._history: list[Message] = []
-        # 口型诊断：最近一次 phoneme → mouth 时间线 (供 diag.lip_sync_sample 对比)
-        self._last_expected_frames: list[dict] = []
+        # 前端播放完成信号
+        self._playback_done: asyncio.Event = asyncio.Event()
 
         # 音频缓冲
         self._audio_buffer: list[np.ndarray] = []
@@ -98,6 +102,10 @@ class AudioPipeline:
     def feed_audio(self, audio_chunk: np.ndarray):
         """接收前端传来的音频帧，放入处理队列"""
         self._input_queue.put_nowait(audio_chunk)
+
+    def notify_playback_done(self):
+        """前端通知音频播放完毕"""
+        self._playback_done.set()
 
     # ── 主循环 ──────────────────────────────────
 
@@ -169,7 +177,7 @@ class AudioPipeline:
     # ── 语音处理 ────────────────────────────────
 
     async def _process_speech(self):
-        """处理收集到的语音段: ASR → LLM(streaming) → TTS"""
+        """处理收集到的语音段: ASR → respond()"""
         cancel = self._session.cancel_event
 
         try:
@@ -184,14 +192,14 @@ class AudioPipeline:
 
             # 使用流式 ASR，每识别出一个片段就推送给前端
             final_text = ""
-            speech_emotion: str | None = None  # Phase 5: SenseVoice 语音情绪
+            speech_emotion: str | None = None  # SenseVoice 语音情绪
             async for partial_result in self._asr.stream_transcribe(audio):
                 if cancel.is_set():
                     return
 
                 if partial_result.is_final:
                     final_text = partial_result.text.strip()
-                    speech_emotion = partial_result.emotion  # Phase 5: 提取语音情绪
+                    speech_emotion = partial_result.emotion
                     await self._on_asr_result(final_text, True) if self._on_asr_result else None
                 else:
                     # 中间结果：显示正在进行中的识别
@@ -205,108 +213,173 @@ class AudioPipeline:
                 await self._session.transition("speaking_done", reason="empty_asr")
                 return
 
-            # 2. LLM — 流式生成
-            # 先发送处理中状态，准备进入 SPEAKING
+            # 2. 进入 SPEAKING，走共享 speak 管线
             await self._session.transition("processing_done", reason="response_ready")
-
-            # 构建消息
-            self._history.append(Message(role="user", content=final_text))
-            # 限制历史长度
-            max_history = config.get("conversation.max_history_messages", 20)
-            if len(self._history) > max_history + 1:  # +1 for system prompt
-                # 保留 system prompt + 最近的消息
-                system_msgs = [m for m in self._history if m.role == "system"]
-                non_system = [m for m in self._history if m.role != "system"]
-                self._history = system_msgs + non_system[-(max_history):]
-
-            # 收集流式响应文本
-            response_parts: list[str] = []
-            is_first = True
-            tools_used = False
-
-            logger.info("LLM streaming start")
-            async for chunk in self._llm.stream_chat(
-                self._history,
-                tools=None,  # 暂时不传工具，先跑通基本流式
-                cancel_event=cancel,
-            ):
-                if cancel.is_set():
-                    return
-
-                if chunk.type == "text":
-                    response_parts.append(chunk.content)
-                    if self._on_llm:
-                        await self._on_llm(chunk.content, is_first, False)
-                        is_first = False
-                elif chunk.type == "tool_call":
-                    tools_used = True
-                    logger.info(f"LLM tool call: {chunk.tool_call}")
-
-            # 发送最后一个空 chunk 标记结束
-            if self._on_llm and not is_first:
-                await self._on_llm("", False, True)
-
-            response_text = "".join(response_parts).strip()
-            logger.info(f"LLM result: {response_text[:80]}...")
-
-            if not response_text and not tools_used:
-                response_text = "抱歉，我不太明白你的意思。"
-
-            # 保存到历史
-            if response_text:
-                self._history.append(Message(role="assistant", content=response_text))
-
-            if cancel.is_set():
-                return
-
-            # 3. TTS — 流式合成（逐句播放）
-            logger.info(f"TTS synthesizing: {response_text[:50]}...")
-
-            total_duration_ms = 0.0
-            async for tts_result in self._tts.stream_synthesize(response_text):
-                if cancel.is_set():
-                    return
-
-                # 记录音频起始时间（必须在发送音频之前，保证口型同步）
-                tts_start_time = time.time()
-
-                # 发送音频块
-                if self._on_tts_audio:
-                    await self._on_tts_audio(tts_result)
-
-                # 口型 + 情绪时间线 (Phase 4: 统一使用 build_timeline_message)
-                if self._on_live2d and tts_result.phonemes:
-                    timeline_msg = self._motion.build_timeline_message(
-                        tts_result.text, tts_result.phonemes, tts_start_time,
-                        speech_emotion=speech_emotion,  # Phase 5: 传入语音情绪
-                    )
-                    # 口型诊断：存储预期时间线供 diag.lip_sync_sample 对比
-                    if config.get("debug.lip_sync_profiling", False):
-                        self._last_expected_frames = self._motion.phonemes_to_lip_sync(
-                            tts_result.phonemes
-                        )
-                    await self._on_live2d(timeline_msg)
-
-                total_duration_ms += tts_result.duration_ms
-
-            # Phase 4: 情绪已整合进 timeline，不再单独发送 expression 消息
-
-            # 等待所有音频播完
-            await asyncio.sleep(total_duration_ms / 1000.0)
-
-            if cancel.is_set():
-                return
-
-            await self._session.transition("speaking_done", reason="tts_finished")
+            await self.respond(final_text, speech_emotion=speech_emotion)
 
         except asyncio.CancelledError:
             logger.info("Speech processing cancelled (interrupted)")
         except Exception as e:
             logger.error(f"Speech processing error: {e}", exc_info=True)
-            try:
+            with contextlib.suppress(Exception):
                 await self._session.transition("speaking_done", reason="error")
-            except Exception:
-                pass
+
+    # ── 共享 speak 管线 ─────────────────────────
+
+    async def respond(self, user_text: str, speech_emotion: str | None = None) -> None:
+        """
+        共享 speak 管线（语音路径和文字聊天共用）。
+
+        LLM stream → Segmenter 分句 → 有界并发 TTS → 按 seq 有序发送 tts.audio
+        payload → 等前端 playback.done → speaking_done。
+
+        取消语义: cancel_event 置位后，worker 不再合成、消费者不再发送，
+        但所有任务都会正常收尾（try/finally 投递 + sentinel），不会泄漏。
+        调用方需先把状态机推进到 SPEAKING（processing_done）。
+        """
+        cancel = self._session.cancel_event
+        utterance_id = uuid.uuid4().hex[:8]
+        self._playback_done.clear()  # 清掉上一轮（可能被打断）的残留信号
+
+        # 对话历史
+        self._history.append(Message(role="user", content=user_text))
+        max_history = config.get("conversation.max_history_messages", 20)
+        if len(self._history) > max_history + 1:  # +1 for system prompt
+            system_msgs = [m for m in self._history if m.role == "system"]
+            non_system = [m for m in self._history if m.role != "system"]
+            self._history = system_msgs + non_system[-max_history:]
+
+        segmenter = Segmenter(
+            min_segment_length=config.get("tts.streaming.min_segment_length", 15),
+            first_segment_punc=config.get("tts.streaming.first_segment_punc", "，,。！？!?；;"),
+            rest_segment_punc=config.get("tts.streaming.rest_segment_punc", "。！？!?；;"),
+        )
+        tts_sem = asyncio.Semaphore(config.get("tts.streaming.max_concurrent_synthesis", 2))
+        tts_queue: asyncio.Queue = asyncio.Queue()
+        tts_tasks: list[asyncio.Task] = []
+        tts_order = 0
+        t0 = time.time()  # TTFA 测量起点
+
+        async def _tts_worker(text: str, order: int):
+            """后台 TTS 合成任务。无论成功/失败/取消都必须投递，消费者按序推进。"""
+            result = None
+            async with tts_sem:
+                try:
+                    if not cancel.is_set():
+                        result = await self._tts.synthesize(text)
+                except Exception as e:
+                    logger.error(f"TTS worker [{order}] failed: {e}")
+                finally:
+                    await tts_queue.put((order, result))  # result=None → 消费者跳过该句
+
+        async def _consume() -> float:
+            """按 order 有序消费 TTS 结果，构建 payload 发送，返回总时长(ms)"""
+            next_order = 0
+            seq = 0  # 实际发送序号（跳过失败句后仍连续）
+            pending: dict[int, object] = {}
+            ttfa_logged = False
+            total_ms = 0.0
+
+            while True:
+                item = await tts_queue.get()
+                if item is None:  # sentinel
+                    return total_ms
+                order, result = item
+                pending[order] = result
+
+                while next_order in pending:
+                    r = pending.pop(next_order)
+                    next_order += 1
+                    if r is None or not r.audio_bytes:
+                        logger.warning(f"TTS sentence [{next_order - 1}] skipped")
+                        continue
+                    if cancel.is_set():
+                        continue  # 打断后只排空，不再发送
+
+                    if not ttfa_logged:
+                        logger.info(f"TTFA: {(time.time() - t0) * 1000:.0f}ms (respond start → first audio sent)")
+                        ttfa_logged = True
+
+                    expr = self._motion.get_expression_for_text(r.text, speech_emotion) if self._motion else None
+                    payload = {
+                        "utteranceId": utterance_id,
+                        "seq": seq,
+                        "audio": base64.b64encode(r.audio_bytes).decode("ascii"),
+                        "format": r.format,
+                        "durationMs": r.duration_ms,
+                        "text": r.text,
+                        "expressions": (
+                            [{"name": expr.name, "durationMs": expr.duration_ms}] if expr else []
+                        ),
+                    }
+                    if self._on_tts_audio:
+                        await self._on_tts_audio(payload)
+                    total_ms += r.duration_ms
+                    seq += 1
+
+        consumer_task = asyncio.create_task(_consume())
+        total_duration_ms = 0.0
+
+        try:
+            try:
+                # LLM 流式生成 + 增量分句提交 TTS
+                response_parts: list[str] = []
+                is_first = True
+                async for chunk in self._llm.stream_chat(
+                    self._history, tools=None, cancel_event=cancel,
+                ):
+                    if cancel.is_set():
+                        break
+                    if chunk.type == "text":
+                        response_parts.append(chunk.content)
+                        if self._on_llm:
+                            await self._on_llm(chunk.content, is_first, False)
+                            is_first = False
+                        for sentence in segmenter.feed(chunk.content):
+                            tts_tasks.append(asyncio.create_task(_tts_worker(sentence, tts_order)))
+                            tts_order += 1
+                    elif chunk.type == "tool_call":
+                        logger.info(f"LLM tool call: {chunk.tool_call}")
+
+                if self._on_llm and not is_first:
+                    await self._on_llm("", False, True)
+
+                if not cancel.is_set():
+                    remaining = segmenter.flush()
+                    if remaining:
+                        tts_tasks.append(asyncio.create_task(_tts_worker(remaining, tts_order)))
+                        tts_order += 1
+
+                response_text = "".join(response_parts).strip()
+                logger.info(f"LLM result ({tts_order} sentences): {response_text[:80]}...")
+                if response_text:
+                    self._history.append(Message(role="assistant", content=response_text))
+            finally:
+                # 正常/取消/异常统一收尾：等 worker → sentinel → 等消费者
+                if tts_tasks:
+                    await asyncio.gather(*tts_tasks, return_exceptions=True)
+                await tts_queue.put(None)
+                with contextlib.suppress(asyncio.CancelledError):
+                    total_duration_ms = await consumer_task
+
+            # 等待前端播放完成（替代估算 sleep）
+            if not cancel.is_set() and total_duration_ms > 0:
+                timeout_s = (total_duration_ms / 1000.0) * 1.5 + 2.0
+                try:
+                    await asyncio.wait_for(self._playback_done.wait(), timeout=timeout_s)
+                    logger.info("Playback confirmed by frontend")
+                except asyncio.TimeoutError:
+                    logger.warning(f"playback.done timeout after {timeout_s:.1f}s, proceeding anyway")
+
+        except asyncio.CancelledError:
+            logger.info("respond() cancelled (interrupted)")
+        except Exception as e:
+            logger.error(f"respond() error: {e}", exc_info=True)
+        finally:
+            self._playback_done.clear()
+            # INTERRUPTED 状态下 transition 返回 False（no-op），由主循环走 interrupt_handled
+            with contextlib.suppress(Exception):
+                await self._session.transition("speaking_done", reason="tts_finished")
 
     def _flush_queue(self):
         """清空输入队列中的残留音频帧"""
