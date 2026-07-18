@@ -57,6 +57,12 @@ tts:
   chattts:
     seed: 42
     temperature: 0.3
+  # Phase B: 流式分句 TTS（LLM 边出字边合成）
+  streaming:
+    min_segment_length: 15       # 首句成句最小字数
+    first_segment_punc: "，,。！？!?；;"   # 首句允许逗号切分（压低首句延迟）
+    rest_segment_punc: "。！？!?；;"
+    max_concurrent_synthesis: 2  # 并发 TTS 任务上限
 
 # ── 大语言模型 ──────────────────────────────
 llm:

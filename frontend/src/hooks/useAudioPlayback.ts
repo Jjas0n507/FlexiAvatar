@@ -4,17 +4,21 @@
  * 监听 store 的 ttsSpeech 状态，用 AudioContext + AudioBufferSourceNode
  * 精确播放音频，并记录 playbackStartTime 供 Live2D rAF 同步口型。
  *
+ * Phase B: 音频自然结束后发送 playback.done 通知后端。
+ *
  * ponytail: 模块级单例 audioEngine，避免重复创建 AudioContext。
  *           所有 AudioContext 操作包裹 try-catch，失败不影响渲染。
  */
 
 import { useEffect } from "react";
 import { useAgentStore } from "../stores/agent-store";
+import { wsClient } from "../services/ws-client";
 
 // ── 模块级单例 (惰性初始化，不在模块加载时创建) ──────────
 let _audioCtx: AudioContext | null = null;
 let _playbackStartTime = 0;
 let _currentSource: AudioBufferSourceNode | null = null;
+let _doneTimer: ReturnType<typeof setTimeout> | null = null;  // Phase B
 
 function getAudioContext(): AudioContext | null {
   if (_audioCtx) return _audioCtx;
@@ -52,13 +56,30 @@ export const audioEngine = {
   },
 };
 
+/** Phase B: 调度 playback.done，会被新音频到达取消 */
+function schedulePlaybackDone(): void {
+  if (_doneTimer) clearTimeout(_doneTimer);
+  _doneTimer = setTimeout(() => {
+    console.log("[Audio] sending playback.done");
+    wsClient.sendPlaybackDone();
+    _doneTimer = null;
+  }, 300);  // 300ms 宽限期，让后续音频段有机会到达
+}
+
 export function useAudioPlayback(): void {
   useEffect(() => {
     const unsub = useAgentStore.subscribe(
       (state) => state.ttsSpeech,
       async (speech) => {
         if (!speech?.audio) return;
-        console.log("[Audio] ttsSpeech received, entries:", speech.entries?.length, "durationMs:", speech.durationMs);
+
+        // Phase B: 新音频到达时取消待发的 playback.done
+        if (_doneTimer) {
+          clearTimeout(_doneTimer);
+          _doneTimer = null;
+        }
+
+        console.log("[Audio] ttsSpeech received, phonemes:", speech.phonemes?.length, "durationMs:", speech.durationMs);
 
         const ctx = getAudioContext();
         if (!ctx) {
@@ -102,9 +123,14 @@ export function useAudioPlayback(): void {
 
           source.onended = () => {
             if (_currentSource === source) {
+              // 自然播完（未被新段打断）
               _currentSource = null;
+              console.log("[Audio] playback ended (natural)");
+              // Phase B: 宽限期后通知后端（等待后续音频段）
+              schedulePlaybackDone();
+            } else {
+              console.log("[Audio] playback ended (interrupted by next segment)");
             }
-            console.log("[Audio] playback ended");
           };
         } catch (e) {
           console.error("[Audio] playback failed:", e);
@@ -115,6 +141,10 @@ export function useAudioPlayback(): void {
     return () => {
       unsub();
       audioEngine.stop();
+      if (_doneTimer) {
+        clearTimeout(_doneTimer);
+        _doneTimer = null;
+      }
     };
   }, []);
 }

@@ -435,6 +435,16 @@ async def handle_ping(client_id: str, payload: dict) -> None:
     })
 
 
+async def handle_playback_done(client_id: str, payload: dict) -> None:
+    """Phase B: 前端通知音频播放完毕"""
+    pipeline = client_pipelines.get(client_id)
+    if pipeline:
+        pipeline.notify_playback_done()
+        logger.debug(f"playback.done from {client_id}")
+    else:
+        logger.warning(f"playback.done from unknown client {client_id}")
+
+
 # 消息处理器映射
 MESSAGE_HANDLERS = {
     "user.interrupt": handle_interrupt,
@@ -442,6 +452,7 @@ MESSAGE_HANDLERS = {
     "audio.chunk": handle_audio_chunk,
     "ping": handle_ping,
     "diag.lip_sync_sample": handle_diag_lip_sync,
+    "playback.done": handle_playback_done,
 }
 
 
