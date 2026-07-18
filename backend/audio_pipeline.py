@@ -61,6 +61,8 @@ class AudioPipeline:
 
         # 对话历史 (保留上下文)
         self._history: list[Message] = []
+        # 口型诊断：最近一次 phoneme → mouth 时间线 (供 diag.lip_sync_sample 对比)
+        self._last_expected_frames: list[dict] = []
 
         # 音频缓冲
         self._audio_buffer: list[np.ndarray] = []
@@ -278,6 +280,11 @@ class AudioPipeline:
                         tts_result.text, tts_result.phonemes, tts_start_time,
                         speech_emotion=speech_emotion,  # Phase 5: 传入语音情绪
                     )
+                    # 口型诊断：存储预期时间线供 diag.lip_sync_sample 对比
+                    if config.get("debug.lip_sync_profiling", False):
+                        self._last_expected_frames = self._motion.phonemes_to_lip_sync(
+                            tts_result.phonemes
+                        )
                     await self._on_live2d(timeline_msg)
 
                 total_duration_ms += tts_result.duration_ms

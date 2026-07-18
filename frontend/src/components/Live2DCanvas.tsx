@@ -12,6 +12,7 @@ import React, { useRef, useEffect, useCallback, useState } from "react";
 import { Live2DCubismModel } from "live2d-renderer";
 import { useAgentStore } from "../stores/agent-store";
 import { audioEngine } from "../hooks/useAudioPlayback";
+import { wsClient } from "../services/ws-client";
 import type { Live2DControlPayload, LipSyncFrame, ModelProfile } from "../types";
 
 // MotionPriority enum 值 (live2d-renderer 导出为 type，运行时用数值)
@@ -293,6 +294,14 @@ const Live2DCanvas: React.FC = () => {
     const maxWaitMs = 10000; // 最多等 10 秒音频开始 (decodeAudioData 可能需要 1-2 秒)
     let frameIdx = 0;
 
+    // ── 口型诊断采样 ──────────────────────────
+    let tickCount = 0;
+    const diagSamples: Array<{
+      audioTimeMs: number;
+      frameTimeMs: number;
+      params: Record<string, number>;
+    }> = [];
+
     // 记录调用时的 playbackStartTime — 等待它变化（新音频开始播放）
     // 避免拾取上一段音频残留的 startTime
     const prevStartTime = audioEngine.playbackStartTime;
@@ -342,12 +351,30 @@ const Live2DCanvas: React.FC = () => {
           const shape = getMouthShape(frame.mouth, profile);
           setMouthParams(modelRef.current, shape.openY, shape.form, mouthParams.openY, mouthParams.form);
         }
+
+        // 口型诊断: 每 ~3 tick (~50ms) 采样一次实际参数值
+        tickCount++;
+        if (tickCount % 3 === 0 && frame.params && Object.keys(frame.params).length > 0) {
+          diagSamples.push({
+            audioTimeMs: nowMs,
+            frameTimeMs: frame.timeMs,
+            params: { ...frame.params },
+          });
+        }
       }
 
       // 音频未结束则继续
       const lastFrame = frames[frames.length - 1];
       if (nowMs < lastFrame.timeMs + 200) {
         lipSyncRafRef.current = requestAnimationFrame(tick);
+      } else {
+        // 口型诊断: 发送采样数据回后端
+        if (diagSamples.length > 0) {
+          wsClient.send("diag.lip_sync_sample", {
+            samples: diagSamples,
+            segmentIdx: 0,
+          });
+        }
       }
     };
 

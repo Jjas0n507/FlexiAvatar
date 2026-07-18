@@ -103,6 +103,10 @@ tools:
     - "web_search"
   max_tool_rounds: 5
 
+# ── 调试/诊断 ────────────────────────────────
+debug:
+  lip_sync_profiling: false      # 开启后前端回传口型采样，后端对比时间线并输出诊断日志
+
 # ── 对话 ─────────────────────────────────────
 conversation:
   max_history_messages: 20
