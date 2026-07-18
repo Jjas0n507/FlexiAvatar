@@ -250,7 +250,7 @@ async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) 
                         await pipeline._on_tts_audio(tts_result)
                     if pipeline._on_live2d and tts_result.phonemes:
                         timeline_msg = pipeline._motion.build_timeline_message(
-                            tts_result.text, tts_result.phonemes, time.time()
+                            tts_result.text, tts_result.phonemes
                         )
                         # 口型诊断：存储预期时间线供 diag.lip_sync_sample 对比
                         if config.get("debug.lip_sync_profiling", False):

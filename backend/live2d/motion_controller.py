@@ -367,23 +367,24 @@ class MotionController:
         return [p.strip() for p in parts if p.strip()]
 
     def build_timeline_message(
-        self, text: str, phonemes: list[Phoneme], audio_start_time: float,
+        self, text: str, phonemes: list[Phoneme],
+        audio_start_time: float = 0.0,  # Phase C: deprecated, frontend uses AudioContext clock
         speech_emotion: str | None = None,
     ) -> dict:
         """
         Phase 2.2: 构建混合时间线消息。
 
         将口型帧和分段表情合并为一条时间线，按 timeMs 排序。
-        前端按时间线调度播放，消除单独的表情消息。
+        timeMs 为相对音频段起点的偏移（ms），前端由 AudioContext.currentTime 驱动。
 
         Args:
             text: TTS 文本
             phonemes: 音素列表
-            audio_start_time: 音频起始时间戳
+            audio_start_time: (Phase C deprecated) 前端不再使用 wall-clock
             speech_emotion: SenseVoice 语音情绪 (Phase 5)，None 表示无语音情绪输入
 
         Returns:
-            {"command": "timeline", "entries": [...], "audio_start_time": ...}
+            {"command": "timeline", "entries": [...]}
         """
         entries: list[dict] = []
 
@@ -400,12 +401,9 @@ class MotionController:
         # 2. 分段情绪 → timeline entries
         segments = self._split_text_to_segments(text)
         if segments:
-            # 找到每个段对应的音素时间范围
             seg_phonemes = self._align_phonemes_to_segments(phonemes, segments)
-            cum_offset = 0.0
             for seg_text, seg_ps in zip(segments, seg_phonemes):
                 if not seg_ps:
-                    cum_offset += 1000.0  # 无音素时粗略估计 1 秒
                     continue
 
                 emotion = detect_emotion(seg_text, speech_emotion=speech_emotion)
@@ -426,15 +424,13 @@ class MotionController:
                         },
                     })
 
-                cum_offset = seg_end
-
         # 3. 按 timeMs 排序
         entries.sort(key=lambda e: e["timeMs"])
 
         return {
             "command": "timeline",
             "entries": entries,
-            "audio_start_time": audio_start_time,
+            # Phase C: audio_start_time 保留用于向后兼容，前端已不使用
         }
 
     @staticmethod

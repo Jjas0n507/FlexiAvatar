@@ -13,7 +13,15 @@ import { Live2DCubismModel } from "live2d-renderer";
 import { useAgentStore } from "../stores/agent-store";
 import { audioEngine } from "../hooks/useAudioPlayback";
 import { wsClient } from "../services/ws-client";
-import type { Live2DControlPayload, LipSyncFrame, ModelProfile } from "../types";
+import type { Live2DControlPayload, LipSyncFrame, ModelProfile, TimelineEntry } from "../types";
+
+// Phase C: expression event for rAF-driven scheduling
+interface ExpressionEvent {
+  timeMs: number;
+  name: string;
+  durationMs: number;
+  fadeOutMs: number;
+}
 
 // MotionPriority enum 值 (live2d-renderer 导出为 type，运行时用数值)
 const MotionPriority = {
@@ -279,7 +287,10 @@ const Live2DCanvas: React.FC = () => {
   const lipSyncTimerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const lipSyncRafRef = useRef<number>(0);
 
-  const applyLipSync = useCallback((frames: LipSyncFrame[]) => {
+  const applyLipSync = useCallback((
+    frames: LipSyncFrame[],
+    expressions?: ExpressionEvent[]
+  ) => {
     if (!frames.length) return;
 
     // 清理上一轮
@@ -291,8 +302,14 @@ const Live2DCanvas: React.FC = () => {
     const mouthParams = getMouthParams(profile);
 
     const callTime = performance.now();
-    const maxWaitMs = 10000; // 最多等 10 秒音频开始 (decodeAudioData 可能需要 1-2 秒)
+    const maxWaitMs = 10000;
     let frameIdx = 0;
+
+    // Phase C: expression events in rAF
+    let exprIdx = 0;
+    const triggeredExprs = new Set<number>();
+    let neutralReturnMs = -1;
+    const exprEvents = expressions ?? [];
 
     // ── 口型诊断采样 ──────────────────────────
     let tickCount = 0;
@@ -302,26 +319,36 @@ const Live2DCanvas: React.FC = () => {
       params: Record<string, number>;
     }> = [];
 
-    // 记录调用时的 playbackStartTime — 等待它变化（新音频开始播放）
-    // 避免拾取上一段音频残留的 startTime
     const prevStartTime = audioEngine.playbackStartTime;
 
     const tick = () => {
-      // 每帧动态读取音频时钟 — 不在启动时捕获
       const ctx = audioEngine.audioCtx;
       const startTime = audioEngine.playbackStartTime;
 
       let nowMs: number;
       if (ctx && startTime > 0 && startTime !== prevStartTime) {
-        // 新音频已开始 — 用音频时钟精确同步
         nowMs = (ctx.currentTime - startTime) * 1000;
       } else if (performance.now() - callTime < maxWaitMs) {
-        // 等待新音频开始解码/播放
         lipSyncRafRef.current = requestAnimationFrame(tick);
         return;
       } else {
-        // 超时 fallback — audio 可能失败
         nowMs = performance.now() - callTime - maxWaitMs;
+      }
+
+      // Phase C: rAF-driven expression scheduling
+      while (exprIdx < exprEvents.length && exprEvents[exprIdx].timeMs <= nowMs) {
+        if (!triggeredExprs.has(exprIdx)) {
+          const evt = exprEvents[exprIdx];
+          setExpression(evt.name);
+          triggeredExprs.add(exprIdx);
+          neutralReturnMs = nowMs + evt.durationMs + (evt.fadeOutMs ?? 300);
+        }
+        exprIdx++;
+      }
+      // Return to neutral after expression duration
+      if (neutralReturnMs > 0 && nowMs >= neutralReturnMs) {
+        setExpression("neutral");
+        neutralReturnMs = -1;
       }
 
       // 顺序扫描：跳到当前时间对应的帧
@@ -330,29 +357,51 @@ const Live2DCanvas: React.FC = () => {
       }
 
       const frame = frames[frameIdx];
+      const nextFrame = frameIdx + 1 < frames.length ? frames[frameIdx + 1] : null;
+
       if (frame && frame.timeMs <= nowMs) {
-        // 优先使用 frame.params（后端计算的具体参数值）
-        let applied = false;
-        if (frame.params && Object.keys(frame.params).length > 0) {
+        // Phase C: 60ms 插值过渡 (协同发音)
+        if (nextFrame &&
+            nextFrame.timeMs - frame.timeMs <= 60 &&
+            frame.params && Object.keys(frame.params).length > 0 &&
+            nextFrame.params && Object.keys(nextFrame.params).length > 0) {
+          const t = Math.min(1, (nowMs - frame.timeMs) / Math.max(1, nextFrame.timeMs - frame.timeMs));
+          const allKeys = new Set([...Object.keys(frame.params), ...Object.keys(nextFrame.params)]);
+          const lerped: Record<string, number> = {};
+          for (const key of allKeys) {
+            const a = (frame.params[key] as number) ?? 0;
+            const b = (nextFrame.params[key] as number) ?? 0;
+            lerped[key] = a + (b - a) * t;
+          }
           const m = modelRef.current as unknown as ModelWithSetParam | null;
           if (m?.loaded) {
             try {
-              for (const [key, value] of Object.entries(frame.params)) {
+              for (const [key, value] of Object.entries(lerped)) {
                 m.setParameter(key, value);
               }
-              applied = true;
-            } catch {
-              // Cubism SDK crashes on unknown param IDs — fall through to lookup
+            } catch { /* Cubism SDK param ID error */ }
+          }
+        } else {
+          // 直接应用（阶跃，gap > 60ms 或无下一帧）
+          let applied = false;
+          if (frame.params && Object.keys(frame.params).length > 0) {
+            const m = modelRef.current as unknown as ModelWithSetParam | null;
+            if (m?.loaded) {
+              try {
+                for (const [key, value] of Object.entries(frame.params)) {
+                  m.setParameter(key, value);
+                }
+                applied = true;
+              } catch { /* fall through to lookup */ }
             }
           }
-        }
-        if (!applied) {
-          // Fallback: 口型查表 (只使用 ParamMouthOpenY + ParamMouthForm)
-          const shape = getMouthShape(frame.mouth, profile);
-          setMouthParams(modelRef.current, shape.openY, shape.form, mouthParams.openY, mouthParams.form);
+          if (!applied) {
+            const shape = getMouthShape(frame.mouth, profile);
+            setMouthParams(modelRef.current, shape.openY, shape.form, mouthParams.openY, mouthParams.form);
+          }
         }
 
-        // 口型诊断: 每 ~3 tick (~50ms) 采样一次实际参数值
+        // 口型诊断: 每 ~3 tick (~50ms) 采样一次
         tickCount++;
         if (tickCount % 3 === 0 && frame.params && Object.keys(frame.params).length > 0) {
           diagSamples.push({
@@ -363,12 +412,13 @@ const Live2DCanvas: React.FC = () => {
         }
       }
 
-      // 音频未结束则继续
+      // 判断是否继续
       const lastFrame = frames[frames.length - 1];
-      if (nowMs < lastFrame.timeMs + 200) {
+      const hasPendingExpr = exprIdx < exprEvents.length || neutralReturnMs > nowMs;
+      if (nowMs < lastFrame.timeMs + 200 || hasPendingExpr) {
         lipSyncRafRef.current = requestAnimationFrame(tick);
       } else {
-        // 口型诊断: 发送采样数据回后端
+        // 口型诊断: 发送采样数据
         if (diagSamples.length > 0) {
           wsClient.send("diag.lip_sync_sample", {
             samples: diagSamples,
@@ -504,42 +554,29 @@ const Live2DCanvas: React.FC = () => {
 
         switch (control.command) {
           case "timeline":
-            // Phase 4+: 统一时间线 — 从 entries 中提取 mouth/expression 事件
+            // Phase C: AudioContext 时钟统一 + rAF 驱动表情
             if (control.entries?.length) {
-              // 计算时钟偏移：audio_start_time 是后端 Unix 时间戳(秒)
-              const elapsed = control.audio_start_time
-                ? Date.now() - control.audio_start_time * 1000
-                : 0;
-
-              // 提取口型帧
+              // 口型帧：timeMs 为相对音频起点的偏移，无需 wall-clock 补偿
               const lipFrames: LipSyncFrame[] = [];
+              const exprEvents: ExpressionEvent[] = [];
               for (const entry of control.entries) {
                 if (entry.type === "mouth") {
                   lipFrames.push({
-                    timeMs: Math.max(0, entry.timeMs - elapsed),
+                    timeMs: entry.timeMs,
                     mouth: entry.mouth ?? "N",
                     params: entry.params ?? {},
                   });
+                } else if (entry.type === "expression" && entry.expression?.name) {
+                  exprEvents.push({
+                    timeMs: entry.timeMs,
+                    name: entry.expression.name,
+                    durationMs: entry.expression.durationMs,
+                    fadeOutMs: entry.expression.fadeOutMs ?? 300,
+                  });
                 }
               }
-              if (lipFrames.length > 0) {
-                applyLipSync(lipFrames);
-              }
-
-              // 提取表情事件并定时调度
-              for (const entry of control.entries) {
-                if (entry.type === "expression" && entry.expression?.name) {
-                  const delay = Math.max(0, entry.timeMs - elapsed);
-                  const { name, durationMs, fadeOutMs } = entry.expression;
-                  setTimeout(() => {
-                    setExpression(name);
-                    // 表情持续后回 neutral
-                    if (durationMs > 0) {
-                      setTimeout(() => setExpression("neutral"), durationMs + (fadeOutMs ?? 300));
-                    }
-                  }, delay);
-                }
-              }
+              // 口型 + 表情都由 rAF + AudioContext 时钟驱动
+              applyLipSync(lipFrames, exprEvents);
             }
             break;
 

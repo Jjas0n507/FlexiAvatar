@@ -282,14 +282,12 @@ class AudioPipeline:
                             logger.info(f"TTFA: {ttfa:.0f}ms (ASR end → first audio sent)")
                             ttfa_logged = True
 
-                        tts_start_time = time.time()
-
                         if self._on_tts_audio:
                             await self._on_tts_audio(r)
 
                         if self._on_live2d and r.phonemes:
                             timeline_msg = self._motion.build_timeline_message(
-                                r.text, r.phonemes, tts_start_time,
+                                r.text, r.phonemes,
                                 speech_emotion=speech_emotion,
                             )
                             if config.get("debug.lip_sync_profiling", False):
