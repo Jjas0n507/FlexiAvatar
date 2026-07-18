@@ -65,7 +65,4 @@ def create_tts(config: Config):
             voice=config.get("tts.edge_tts.voice", "zh-CN-XiaoxiaoNeural"),
             speed=config.get("tts.edge_tts.speed", "+10%"),
         )
-    elif engine == "chattts":
-        from backend.tts.chattts_adapter import ChatTTSAdapter
-        return ChatTTSAdapter()
     raise ValueError(f"Unknown TTS engine: {engine}")

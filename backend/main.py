@@ -23,8 +23,6 @@ from backend.session.manager import SessionManager, SessionState
 from backend.tools.registry import ToolRegistry
 from backend.live2d.motion_controller import MotionController
 from backend.audio_pipeline import AudioPipeline
-from backend.tts.base import TTSResult
-from backend.llm.base import Message
 
 # ── 日志 ─────────────────────────────────────────
 
@@ -130,7 +128,7 @@ async def _get_or_create_pipeline(client_id: str, websocket: WebSocket) -> Audio
         pipeline = AudioPipeline(
             session_manager=session_manager,
             motion_controller=motion_controller,
-            on_tts_audio=lambda result: _send_tts(client_id, result),
+            on_tts_audio=lambda payload: _send_tts(client_id, payload),
             on_live2d_control=lambda msg: send_to(client_id, {
                 "type": "live2d.control",
                 "id": str(uuid.uuid4()),
@@ -155,31 +153,14 @@ async def _get_or_create_pipeline(client_id: str, websocket: WebSocket) -> Audio
     return client_pipelines[client_id]
 
 
-async def _send_tts(client_id: str, result: TTSResult) -> None:
-    """发送 TTS 音频到前端"""
-    ws = connected_clients.get(client_id)
-    if not ws:
-        return
-    try:
-        import base64
-        audio_b64 = base64.b64encode(result.audio_bytes).decode("ascii")
-        await ws.send_json({
-            "type": "tts.audio",
-            "id": str(uuid.uuid4()),
-            "timestamp": int(time.time() * 1000),
-            "payload": {
-                "audio": audio_b64,
-                "format": "wav",
-                "sampleRate": result.sample_rate,
-                "durationMs": result.duration_ms,
-                "phonemes": [
-                    {"phoneme": p.phoneme, "startMs": p.start_ms, "endMs": p.end_ms}
-                    for p in result.phonemes
-                ],
-            },
-        })
-    except Exception as e:
-        logger.error(f"Failed to send TTS audio: {e}")
+async def _send_tts(client_id: str, payload: dict) -> None:
+    """发送 TTS 音频到前端（payload 由 pipeline.respond() 构建）"""
+    await send_to(client_id, {
+        "type": "tts.audio",
+        "id": str(uuid.uuid4()),
+        "timestamp": int(time.time() * 1000),
+        "payload": payload,
+    })
 
 
 async def handle_interrupt(client_id: str, payload: dict) -> None:
@@ -203,7 +184,7 @@ async def handle_audio_chunk(client_id: str, payload: dict, websocket: WebSocket
 
 
 async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) -> None:
-    """处理文本聊天消息（使用流式 LLM）"""
+    """处理文本聊天消息 — 与语音路径共用 pipeline.respond()"""
     text = payload.get("text", "")
     if not text:
         return
@@ -214,58 +195,7 @@ async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) 
     pipeline = await _get_or_create_pipeline(client_id, websocket)
     await pipeline._init_engines()  # 等待 ASR/LLM/TTS 初始化完成
 
-    if pipeline._llm and pipeline._on_llm:
-        await session_manager.transition("vad_speech_start", reason="text_input")
-        await session_manager.transition("vad_speech_end", reason="text_input")
-        await session_manager.transition("processing_done", reason="text_input")
-
-        pipeline._history.append(Message(role="user", content=text))
-
-        response_parts: list[str] = []
-        is_first = True
-
-        async for chunk in pipeline._llm.stream_chat(
-            pipeline._history,
-            tools=None,
-            cancel_event=session_manager.cancel_event,
-        ):
-            if chunk.type == "text":
-                response_parts.append(chunk.content)
-                await pipeline._on_llm(chunk.content, is_first, False)
-                is_first = False
-
-        if not is_first:
-            await pipeline._on_llm("", False, True)
-
-        response_text = "".join(response_parts).strip()
-        if response_text:
-            pipeline._history.append(Message(role="assistant", content=response_text))
-
-        # 合成 TTS（流式），单句失败不中断整体
-        if pipeline._tts and response_text:
-            total_dur = 0.0
-            try:
-                async for tts_result in pipeline._tts.stream_synthesize(response_text):
-                    if pipeline._on_tts_audio:
-                        await pipeline._on_tts_audio(tts_result)
-                    if pipeline._on_live2d and tts_result.phonemes:
-                        timeline_msg = pipeline._motion.build_timeline_message(
-                            tts_result.text, tts_result.phonemes
-                        )
-                        # 口型诊断：存储预期时间线供 diag.lip_sync_sample 对比
-                        if config.get("debug.lip_sync_profiling", False):
-                            pipeline._last_expected_frames = pipeline._motion.phonemes_to_lip_sync(
-                                tts_result.phonemes
-                            )
-                        await pipeline._on_live2d(timeline_msg)
-                    total_dur += tts_result.duration_ms
-            except Exception as e:
-                logger.warning(f"TTS 合成失败（跳过）: {e}")
-            if total_dur > 0:
-                await asyncio.sleep(total_dur / 1000.0)
-
-        await session_manager.transition("speaking_done", reason="tts_finished")
-    else:
+    if pipeline._llm is None:
         # Fallback: LLM 未初始化，使用 echo
         await send_to(client_id, {
             "type": "llm.stream",
@@ -273,156 +203,12 @@ async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) 
             "timestamp": int(time.time() * 1000),
             "payload": {"text": f"[Echo] {text}", "isFirstChunk": True, "isLastChunk": True},
         })
-
-
-# ── 口型同步诊断 ──────────────────────────────
-
-
-def _analyze_lip_sync(expected: list[dict], samples: list[dict]) -> dict:
-    """
-    对比预期时间线与前端采样，输出同步偏差指标。
-
-    expected: [{"time_ms": float, "mouth": str, "params": {paramId: value}}, ...]
-    samples:  [{"audioTimeMs": float, "frameTimeMs": float, "params": {paramId: value}}, ...]
-
-    Returns: dict of metrics for logging.
-    """
-    if not expected or not samples:
-        return {"error": "no_data", "sample_count": len(samples)}
-    if len(samples) < 10:
-        return {"error": "too_few_samples", "sample_count": len(samples)}
-
-    actual_y = [s.get("params", {}).get("ParamMouthOpenY", 0.0) for s in samples]
-    actual_form = [s.get("params", {}).get("ParamMouthForm", 0.0) for s in samples]
-
-    # 2. 时钟偏移: 测量帧切换时刻的延迟
-    #    当 frameTimeMs 变化时，记录 audioTimeMs - 新 frameTimeMs
-    #    正 = 嘴型帧比预期晚 (mouth lags), 负 = 嘴型帧比预期早
-    transition_offsets: list[float] = []
-    prev_ft: float | None = None
-    for s in samples:
-        ft = s.get("frameTimeMs", 0)
-        if prev_ft is not None and ft != prev_ft:
-            transition_offsets.append(s.get("audioTimeMs", 0) - ft)
-        prev_ft = ft
-    offset_mean = sum(transition_offsets) / len(transition_offsets) if transition_offsets else 0.0
-    offset_abs_max = max((abs(o) for o in transition_offsets), default=0.0)
-
-    # 3. Pearson 与余弦 — 按 frameTimeMs 查找期望帧的 params 直接对比
-    #    不插值、不对齐: 时序=偏移指标, 准确性=这些指标
-    import math
-    def pearson_r(x: list[float], y: list[float]) -> float:
-        n = len(x)
-        if n < 2:
-            return 0.0
-        mx = sum(x) / n
-        my = sum(y) / n
-        sx = math.sqrt(sum((v - mx) ** 2 for v in x))
-        sy = math.sqrt(sum((v - my) ** 2 for v in y))
-        if sx < 1e-9 or sy < 1e-9:
-            return 0.0
-        return sum((x[i] - mx) * (y[i] - my) for i in range(n)) / (sx * sy)
-
-    # 构建 frameTimeMs → expected params 的查找表
-    expected_by_time: dict[float, dict] = {}
-    for f in expected:
-        expected_by_time[f["time_ms"]] = f.get("params", {})
-
-    # 容错: 如果 frameTimeMs 不在表中 (wall-clock 调整可能偏离), 找最近帧
-    def _lookup_params(ft: float) -> dict:
-        if ft in expected_by_time:
-            return expected_by_time[ft]
-        # 找最近的帧 (偏差通常 < 采样间隔)
-        if not expected_by_time:
-            return {}
-        closest = min(expected_by_time.keys(), key=lambda t: abs(t - ft))
-        # 只在偏差 ≤200ms 时使用 (超过则可能是完全不同步)
-        if abs(closest - ft) <= 200:
-            return expected_by_time[closest]
-        return {}
-
-    expected_y_by_ft = [
-        _lookup_params(s.get("frameTimeMs", 0)).get("ParamMouthOpenY", 0.0)
-        for s in samples
-    ]
-    expected_form_by_ft = [
-        _lookup_params(s.get("frameTimeMs", 0)).get("ParamMouthForm", 0.0)
-        for s in samples
-    ]
-
-    r_y = pearson_r(expected_y_by_ft, actual_y)
-    r_form = pearson_r(expected_form_by_ft, actual_form)
-
-    # 4. 嘴型准确率: expected params vs actual params 的余弦相似度 (mean)
-    cos_sims: list[float] = []
-    for i, s in enumerate(samples):
-        e = (expected_y_by_ft[i], expected_form_by_ft[i])
-        act = s.get("params", {})
-        a = (act.get("ParamMouthOpenY", 0), act.get("ParamMouthForm", 0))
-        dot = e[0] * a[0] + e[1] * a[1]
-        n_e = math.sqrt(e[0]**2 + e[1]**2)
-        n_a = math.sqrt(a[0]**2 + a[1]**2)
-        if n_e > 1e-9 and n_a > 1e-9:
-            cos_sims.append(dot / (n_e * n_a))
-    cos_sim_mean = sum(cos_sims) / len(cos_sims) if cos_sims else 0.0
-
-    return {
-        "sample_count": len(samples),
-        "expected_frame_count": len(expected),
-        "clock_offset_mean_ms": round(offset_mean, 1),
-        "clock_offset_abs_max_ms": round(offset_abs_max, 1),
-        "mouth_open_y_pearson_r": round(r_y, 3),
-        "mouth_form_pearson_r": round(r_form, 3),
-        "mouth_shape_cosine_sim": round(cos_sim_mean, 3),
-    }
-
-
-async def handle_diag_lip_sync(client_id: str, payload: dict) -> None:
-    """接收前端口型采样数据并输出诊断报告"""
-    profiling_enabled = config.get("debug.lip_sync_profiling", False)
-    if not profiling_enabled:
-        return  # 未启用，静默忽略
-
-    pipeline = client_pipelines.get(client_id)
-    if pipeline is None:
-        logger.warning("[Diag] No pipeline for client %s", client_id)
         return
 
-    expected = getattr(pipeline, "_last_expected_frames", [])
-    samples = payload.get("samples", [])
-    # ponytail: segment_id 区分同一句话的多段音频（分句 TTS 产出多段 timeline）
-    segment_idx = payload.get("segmentIdx", 0)
-
-    result = _analyze_lip_sync(expected, samples)
-    result["segment_idx"] = segment_idx
-
-    # 判断评级
-    offset_ms = result.get("clock_offset_mean_ms", 999)
-    r_y = result.get("mouth_open_y_pearson_r", 0)
-    if abs(offset_ms) < 40 and r_y > 0.9:
-        grade = "✓ OK"
-    elif abs(offset_ms) < 100 and r_y > 0.7:
-        grade = "⚠ TOLERABLE"
-    else:
-        grade = "✗ BAD"
-
-    logger.info(
-        "[LipSync Diag] segment=%d %s offset=%.0fms(max=%.0fms) "
-        "r_y=%.3f r_form=%.3f cos=%.3f samples=%d frames=%d",
-        segment_idx, grade,
-        result["clock_offset_mean_ms"], result["clock_offset_abs_max_ms"],
-        result["mouth_open_y_pearson_r"], result["mouth_form_pearson_r"],
-        result["mouth_shape_cosine_sim"],
-        result["sample_count"], result.get("expected_frame_count", 0),
-    )
-
-    # 偏差过大时输出警告
-    if abs(offset_ms) > 80:
-        logger.warning(
-            "[LipSync Diag] 嘴型偏差 %dms 超过可容忍阈值 (80ms)，"
-            "建议检查: ① WS 消息延迟 ② 音频解码耗时 ③ AudioContext 时钟准确度",
-            abs(offset_ms),
-        )
+    await session_manager.transition("vad_speech_start", reason="text_input")
+    await session_manager.transition("vad_speech_end", reason="text_input")
+    await session_manager.transition("processing_done", reason="text_input")
+    await pipeline.respond(text)
 
 
 async def handle_ping(client_id: str, payload: dict) -> None:
@@ -451,7 +237,6 @@ MESSAGE_HANDLERS = {
     "chat.text": handle_chat_text,
     "audio.chunk": handle_audio_chunk,
     "ping": handle_ping,
-    "diag.lip_sync_sample": handle_diag_lip_sync,
     "playback.done": handle_playback_done,
 }
 

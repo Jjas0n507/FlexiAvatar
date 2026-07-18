@@ -54,9 +54,6 @@ tts:
     voice: "zh-CN-XiaoxiaoNeural"
     speed: "+10%"
     pitch: "+0Hz"
-  chattts:
-    seed: 42
-    temperature: 0.3
   # Phase B: 流式分句 TTS（LLM 边出字边合成）
   streaming:
     min_segment_length: 15       # 首句成句最小字数
@@ -108,10 +105,6 @@ tools:
     - "calculate"
     - "web_search"
   max_tool_rounds: 5
-
-# ── 调试/诊断 ────────────────────────────────
-debug:
-  lip_sync_profiling: false      # 开启后前端回传口型采样，后端对比时间线并输出诊断日志
 
 # ── 对话 ─────────────────────────────────────
 conversation:
