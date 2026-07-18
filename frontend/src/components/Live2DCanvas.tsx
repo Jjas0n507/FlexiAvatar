@@ -214,11 +214,14 @@ const Live2DCanvas: React.FC = () => {
 
         modelRef.current = model;
 
-        // ★ 渲染循环 + FPS 监控
+        // ponytail: library's autoAnimate (default: true) already runs
+        // model.update() every frame via its own rAF. We MUST NOT call
+        // model.update() ourselves — double-render kills FPS on AMD GPU.
+        // FPS monitoring: lightweight rAF counter, no model.update().
+
         const fps = { frames: 0, lastLog: performance.now() };
-        const loop = () => {
+        const fpsCounter = () => {
           if (destroyed) return;
-          model.update();
           fps.frames++;
           const now = performance.now();
           if (now - fps.lastLog >= 3000) {
@@ -226,9 +229,9 @@ const Live2DCanvas: React.FC = () => {
             fps.frames = 0;
             fps.lastLog = now;
           }
-          animFrameRef.current = requestAnimationFrame(loop);
+          animFrameRef.current = requestAnimationFrame(fpsCounter);
         };
-        loop();
+        fpsCounter();
 
         // ★ 再处理动作 — 读可用分组，不在则跳过
         motionGroupsRef.current = getAvailableMotions(model);
