@@ -152,6 +152,12 @@ const Live2DCanvas: React.FC = () => {
           enableMotion: true,       // ponytail: 启用动作自动循环
           enableExpression: true,   // ponytail: 启用表情系统
           enableMovement: false,    // ponytail: 关闭拖拽驱动头部运动
+          // 这台机器上渲染进程里任何 running AudioContext 都会把 WebGL 压到
+          // ~12FPS（与设备开关/是否在播无关，pactl 实证 Electron 空闲也持流）。
+          // 注入 OfflineAudioContext 顶掉库默认 new AudioContext()：decodeAudioData
+          // 照常，永不碰声卡、永不被 autoplay 手势自动 resume；StrictMode
+          // 幽灵实例（destroy 不关 context）也一并无害化。
+          audioContext: new OfflineAudioContext(1, 1, 44100) as unknown as AudioContext,
         });
 
         // 加载模型
@@ -336,11 +342,10 @@ const Live2DCanvas: React.FC = () => {
 
   // ── speak/stop 桥（useAudioPlayback 的播放队列 → 库内置 RMS 口型）──
   //
-  // ponytail: 音频输出走 <audio>（浏览器媒体线程），不走 WebAudio 输出——
-  // 这台 AMD/Linux 机器上运行中的 AudioContext 会把 WebGL 压到 ~10 FPS
-  // 且不恢复（f03b6db 时代同一个坑）。AudioContext 永久 suspended，
-  // 只用 decodeAudioData 拿采样喂 RMS；播放位置读 el.currentTime（媒体
-  // 硬件时钟），与采样消费同源，口型结构上不漂移。
+  // ponytail: 音频输出走 <audio>（浏览器媒体线程），不走 WebAudio 输出。
+  // model.audioContext 是注入的 OfflineAudioContext，只做 decodeAudioData
+  // 拿采样喂 RMS；播放位置读 el.currentTime（媒体硬件时钟），与采样
+  // 消费同源，口型结构上不漂移。全应用零 running AudioContext。
 
   useEffect(() => {
     if (loadState !== "loaded") return;
@@ -353,9 +358,6 @@ const Live2DCanvas: React.FC = () => {
     el.preload = "auto";
     let currentUrl: string | null = null;
     let finishCurrent: (() => void) | null = null;
-
-    // 解码不需要 running 状态；保持 suspended 保 FPS
-    void model.audioContext?.suspend()?.catch?.(() => { /* ignore */ });
 
     const clearSamples = () => {
       wc.samples = null;
