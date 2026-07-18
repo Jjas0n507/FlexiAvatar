@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron'
-import electronRenderer from 'vite-plugin-electron-renderer'
 import path from 'path'
 
 // https://vite.dev/config/
@@ -41,7 +40,8 @@ export default defineConfig({
         },
       },
     ]),
-    electronRenderer(),
+    // electronRenderer() 已摘除：渲染进程零 Node API（全走 WS/preload），
+    // 它的依赖预打包器还会把 pixi 引用的 'url' 外部化成 require() 导致崩溃
   ],
   resolve: {
     alias: {
