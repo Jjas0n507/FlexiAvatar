@@ -21,8 +21,8 @@ torch
 
 # TTS
 edge-tts
-pydub
-pypinyin
+# CosyVoice2（本地音色克隆）依赖不在此列 — 见 Dockerfile 固化层
+# （容器方案），本地 venv 用户参考 backend/tts/cosyvoice_adapter.py 头部注释
 
 # LLM
 openai>=1.0.0
@@ -35,8 +35,6 @@ python-dotenv>=1.0
 # 工具
 httpx>=0.28.0
 pydantic>=2.0
-
-# 分词 / 音素处理 — 已在上方 TTS 区域
 
 # 开发 / 测试
 pytest>=8.0

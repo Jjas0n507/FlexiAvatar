@@ -65,6 +65,7 @@ export class WSClient {
       console.log("[WS] Connected");
       this._isConnected = true;
       this.currentReconnectDelay = RECONNECT_DELAY_MS;
+      this.clearReconnectTimer(); // 清掉断线期间遗留的重连定时器
       this.startHeartbeat();
       this.onConnected?.();
     };

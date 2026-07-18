@@ -9,14 +9,12 @@
     "dev:web": "vite --config vite.config.web.ts",
     "build": "tsc -b && vite build",
     "build:electron": "npm run build && electron-builder",
-    "postinstall": "node scripts/patch-live2d.cjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "electron:dev": "vite",
     "electron:build": "electron-builder"
   },
   "dependencies": {
-    "live2d-renderer": "^0.6.6",
     "pixi-live2d-display": "^0.4.0",
     "pixi.js": "^6.5.10",
     "react": "^19.2.7",

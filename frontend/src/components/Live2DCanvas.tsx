@@ -446,12 +446,19 @@ const Live2DCanvas: React.FC = () => {
             else console.warn(`[Audio] finish: ${reason}`);
             resolve();
           };
-          // 看门狗: onended 偶发丢失会永久卡死泵（后续段全部不播 = 听感截断），
-          // 播到 时长+750ms 仍未 ended 就强制放行
-          const watchdog = setTimeout(
-            () => finish("watchdog (onended lost?)"),
-            decoded.duration * 1000 + 750,
-          );
+          // 看门狗: onended 偶发丢失会永久卡死泵（后续段全部不播 = 听感截断）。
+          // 读播放头判定：还在正常推进就按剩余时长顺延（绝不切尾音），
+          // 播完/停滞才放行。
+          const checkEnd = () => {
+            if (done) return;
+            const remain = decoded.duration - el.currentTime;
+            if (!el.paused && el.currentTime > 0 && isFinite(remain) && remain > 0.05) {
+              watchdog = setTimeout(checkEnd, Math.max(remain * 1000 + 300, 250));
+            } else {
+              finish(`watchdog (onended lost? t=${el.currentTime.toFixed(2)}/${decoded.duration.toFixed(2)})`);
+            }
+          };
+          let watchdog = setTimeout(checkEnd, decoded.duration * 1000 + 750);
           finishCurrent = () => finish("stopped");
           el.onended = () => finish("ended");
           el.onerror = () => finish(`media error ${el.error?.code ?? "?"} ${el.error?.message ?? ""}`);
