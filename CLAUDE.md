@@ -67,7 +67,8 @@ docker compose --profile gpu down
 │                         ├─ funasr (SenseVoiceSmall)   │
 │ Volumes:                ├─ faster-whisper (备选)       │
 │  ollama_data            ├─ silero-vad                 │
-│  modelscope_cache       └─ edge-tts                   │
+│  modelscope_cache       ├─ cosyvoice2 (默认 TTS)      │
+│                         └─ edge-tts (零 GPU 备选)     │
 └──────────────────────────────────────────────────────┘
         │                         │
         │                   backend:8765
@@ -84,7 +85,7 @@ docker compose --profile gpu down
 | `Dockerfile` | 基于 `rocm/pytorch`，安装 funasr/whisper/vad/tts |
 | `docker-compose.yml` | 编排 ollama + backend，profiles: gpu/cpu |
 | `scripts/start-docker.sh` | 一键启动脚本 |
-| `backend/config.user.yaml` | 覆盖 ASR 引擎为 funasr（gitignored） |
+| `backend/config.user.yaml` | 覆盖引擎选择：asr=funasr / llm=ollama / tts=cosyvoice2（gitignored） |
 
 ## Architecture
 
@@ -130,6 +131,7 @@ Abstract base class → adapter implementation, selected by config `engine` fiel
 | ASR | `backend/asr/base.py::BaseASR` | `WhisperASR` | Faster-Whisper (CTranslate2). `HF_ENDPOINT` → `hf-mirror.com`. |
 | ASR | `backend/asr/base.py::BaseASR` | `FunASRAdapter` | SenseVoiceSmall (ModelScope). **ASR+SER 一模型**，输出 `<\|HAPPY\|>文本`。非自回归 ~70ms/10s。 |
 | TTS | `backend/tts/base.py::BaseTTS` | `EdgeTTSAdapter` | MP3 原始字节直传（24kHz 48kbps CBR），`duration_ms=len/6` 估算。口型由前端 RMS 驱动，不需要时间戳。 |
+| TTS | `backend/tts/base.py::BaseTTS` | `CosyVoice2Adapter` | 零样本音色克隆（3-10s ref wav + 逐字文本，换音色=换 config）。WAV 直传，时长精确。ROCm: fp16 开、load_jit/trt 关。**进程单例**（`adapters.py::_cached`）+ 启动预热；短句 RTF ~1.5（段间有静默），长句 ≤1.0。 |
 | LLM | `backend/llm/base.py::BaseLLM` | `OpenAIStreamingAdapter` | SSE streaming. `stream_chat()`, `chat()`, `chat_with_tools()`. |
 
 ### WebSocket Messages
@@ -142,12 +144,18 @@ JSON `{type, id, timestamp, payload}`. Handlers in `main.py` via `MESSAGE_HANDLE
 ### Live2D Lip Sync
 
 ```
-tts.audio (mp3/wav bytes) → 前端 model.inputAudio() → decodeAudioData →
-AudioBufferSourceNode 播放 + 每帧 RMS → model3.json LipSync 组参数
+tts.audio (mp3/wav bytes) → useAudioPlayback FIFO 泵 → speak 桥（Live2DCanvas）:
+OfflineAudioContext 解码（纯内存，不开输出流） + <audio> 媒体线程播放 →
+每帧按 el.currentTime 取窗口 RMS → model3.json LipSync 组参数
 ```
 
-口型与音频读同一份采样数据（live2d-renderer 内置 WavFileController），结构上不会失步；
+渲染器 pixi-live2d-display@0.4.0：参数**每帧回滚**（update 末尾 `loadParameters`），
+持久效果必须在 `beforeModelUpdate` 钩子里每帧重写，单帧写入不可见、"清零复位"有害。
+口型与播放头同源（`el.currentTime`），结构上不失步；`speak()` 带时长看门狗（onended 丢失不卡泵）。
 语音/文字聊天共用后端 `AudioPipeline.respond()`（分句 → 有界并发 TTS → 按 seq 有序发送 → 等 `playback.done`）。
+
+**约束**: WS 消息处理器**不得在接收循环里同步 `await respond()`** —— `playback.done`
+只能从该循环读出，同步等待 = 自死锁（必假超时）。一律 `asyncio.create_task`（语音/文字路径均已如此）。
 
 Emotion detection: **双路径融合** — SenseVoice SER 语音情绪优先，fallback 文本关键词 (`_EMOTION_KEYWORDS` + `_SPEECH_EMOTION_MAP`)。State-driven expressions: listening→neutral, processing→thinking, interrupted→surprised。
 
@@ -166,6 +174,8 @@ Drop a Python file into `backend/tools/user_tools/` — auto-discovered. Inherit
 - **Git**: Feature branches `phase{N}-{name}` from `master`. Run tests before committing.
 - **Gitignored**: `resources/models/`, `resources/test_audio/tts_output_*`, `config.user.yaml`, `backend/tools/user_tools/*`
 - **ffmpeg**: funasr/torchaudio 依赖系统 ffmpeg；TTS 链路已不需要（MP3 直传前端解码）。
+- **前端启动**: 必须经 `scripts/dev-frontend.sh`（或任何非 snap 终端）——snap VSCode 终端泄漏 core20 库路径会打崩 Electron GPU 加速。
+- **Dev 排查口**: dev 模式 Electron 开 CDP `127.0.0.1:9223`（可读 renderer console / 远程执行），renderer 暴露 `window.__wsClient`（均仅 isDev）。
 
 ## Project Status
 
