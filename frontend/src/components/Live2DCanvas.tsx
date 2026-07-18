@@ -184,17 +184,73 @@ const Live2DCanvas: React.FC = () => {
           console.error("[Live2D] WebGL context LOST → 已回退软渲染"),
         );
 
+        // 临时诊断：拆解 update() 内部耗时（定位 110ms/帧 + 40MB/s 分配来源）
+        const prof: Record<string, number> = {};
+        const counts: Record<string, number> = {};
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const wrap = (obj: any, key: string, label: string) => {
+          const orig = obj?.[key];
+          if (typeof orig !== "function") return;
+          obj[key] = (...args: unknown[]) => {
+            const t0 = performance.now();
+            const r = orig.apply(obj, args);
+            prof[label] = (prof[label] ?? 0) + (performance.now() - t0);
+            counts[label] = (counts[label] ?? 0) + 1;
+            return r;
+          };
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anyModel = model as any;
+        wrap(anyModel, "updateCamera", "camera");
+        wrap(anyModel, "updateProjection", "projection");
+        wrap(anyModel, "resize", "resize");
+        wrap(anyModel.webGLRenderer, "prepare", "glPrepare");
+        wrap(anyModel.webGLRenderer, "draw", "glDraw");
+        wrap(anyModel.motionController, "update", "motion");
+        wrap(anyModel.expressionController, "update", "expression");
+        wrap(anyModel.physics, "evaluate", "physics");
+        wrap(anyModel.breath, "updateParameters", "breath");
+        wrap(anyModel.model, "update", "core");
+
         // 自己接管渲染循环（autoAnimate:false）：每帧一次 model.update()，
-        // 生命周期由 destroyed 标志控制，StrictMode 双挂载安全。FPS 计数顺带。
-        const fps = { frames: 0, lastLog: performance.now() };
+        // 生命周期由 destroyed 标志控制，StrictMode 双挂载安全。
+        // 插桩：FPS | 裸 rAF（判定是全进程被饿还是 update 变慢）| update 耗时 | 堆
+        const fps = { frames: 0, lastLog: performance.now(), updMs: 0 };
+        const bare = { frames: 0 };
+        const bareLoop = () => {
+          if (destroyed) return;
+          bare.frames++;
+          requestAnimationFrame(bareLoop);
+        };
+        requestAnimationFrame(bareLoop);
         const renderLoop = () => {
           if (destroyed) return;
+          const t0 = performance.now();
           model.update();
+          fps.updMs += performance.now() - t0;
           fps.frames++;
           const now = performance.now();
           if (now - fps.lastLog >= 3000) {
-            console.log(`[Live2D] FPS: ${Math.round(fps.frames / ((now - fps.lastLog) / 1000))}`);
+            const secs = (now - fps.lastLog) / 1000;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const heap = (performance as any).memory?.usedJSHeapSize as number | undefined;
+            const top = Object.entries(prof)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 4)
+              .map(([k, v]) => `${k} ${(v / Math.max(1, fps.frames)).toFixed(1)}ms×${counts[k]}`)
+              .join(", ");
+            console.log(
+              `[Live2D] FPS: ${Math.round(fps.frames / secs)}` +
+                ` | bare rAF: ${Math.round(bare.frames / secs)}` +
+                ` | update: ${(fps.updMs / Math.max(1, fps.frames)).toFixed(1)}ms` +
+                (heap ? ` | heap: ${Math.round(heap / 1048576)}MB` : "") +
+                ` | ${top}`,
+            );
+            for (const k of Object.keys(prof)) prof[k] = 0;
+            for (const k of Object.keys(counts)) counts[k] = 0;
             fps.frames = 0;
+            fps.updMs = 0;
+            bare.frames = 0;
             fps.lastLog = now;
           }
           animFrameRef.current = requestAnimationFrame(renderLoop);
@@ -354,6 +410,9 @@ const Live2DCanvas: React.FC = () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const wc = model.wavController as any;
+    // 带音频的动作启动时库会调 wavController.start() 覆写采样状态，
+    // 会踩掉正在播的 TTS 口型数据；动作音效不需要 → no-op
+    wc.start = () => { /* no-op */ };
     const el = new Audio();
     el.preload = "auto";
     let currentUrl: string | null = null;
@@ -470,6 +529,7 @@ const Live2DCanvas: React.FC = () => {
       const delay = (minInterval + Math.random() * (maxInterval - minInterval)) * 1000;
       autoBehaviorTimerRef.current = setTimeout(() => {
         const expr = idleExprs[Math.floor(Math.random() * idleExprs.length)];
+        console.log("[Live2D] idle expression:", expr); // 与 FPS 衰减时点做相关性对照
         setExpression(expr);
         scheduleNext();
       }, delay);
