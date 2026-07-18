@@ -129,21 +129,25 @@ Abstract base class → adapter implementation, selected by config `engine` fiel
 | VAD | `backend/vad/base.py::BaseVAD` | `SileroVAD` | **512 samples** exactly (32ms @ 16kHz). Torch tensors, not numpy. |
 | ASR | `backend/asr/base.py::BaseASR` | `WhisperASR` | Faster-Whisper (CTranslate2). `HF_ENDPOINT` → `hf-mirror.com`. |
 | ASR | `backend/asr/base.py::BaseASR` | `FunASRAdapter` | SenseVoiceSmall (ModelScope). **ASR+SER 一模型**，输出 `<\|HAPPY\|>文本`。非自回归 ~70ms/10s。 |
-| TTS | `backend/tts/base.py::BaseTTS` | `EdgeTTSAdapter` | Only `SentenceBoundary` (no `WordBoundary`). Mouth shapes via `pypinyin`. MP3→WAV via `pydub` (requires ffmpeg). |
+| TTS | `backend/tts/base.py::BaseTTS` | `EdgeTTSAdapter` | MP3 原始字节直传（24kHz 48kbps CBR），`duration_ms=len/6` 估算。口型由前端 RMS 驱动，不需要时间戳。 |
 | LLM | `backend/llm/base.py::BaseLLM` | `OpenAIStreamingAdapter` | SSE streaming. `stream_chat()`, `chat()`, `chat_with_tools()`. |
 
 ### WebSocket Messages
 
 JSON `{type, id, timestamp, payload}`. Handlers in `main.py` via `MESSAGE_HANDLERS` dict.
 
-- **Client → Server**: `audio.chunk` (base64 PCM int16), `chat.text`, `user.interrupt`, `ping`
-- **Server → Client**: `state.change`, `asr.result`, `llm.stream`, `tts.audio` (WAV + phonemes), `live2d.control`
+- **Client → Server**: `audio.chunk` (base64 PCM int16), `chat.text`, `user.interrupt`, `playback.done`, `ping`
+- **Server → Client**: `state.change`, `asr.result`, `llm.stream`, `tts.audio` (`{utteranceId, seq, audio: base64 mp3/wav, format, durationMs, expressions}`), `live2d.control` (仅打断等控制)
 
-### Live2D Mouth Shapes
+### Live2D Lip Sync
 
 ```
-TTS text → pypinyin finals → A/I/U/E/O/N → Cubism parameters
+tts.audio (mp3/wav bytes) → 前端 model.inputAudio() → decodeAudioData →
+AudioBufferSourceNode 播放 + 每帧 RMS → model3.json LipSync 组参数
 ```
+
+口型与音频读同一份采样数据（live2d-renderer 内置 WavFileController），结构上不会失步；
+语音/文字聊天共用后端 `AudioPipeline.respond()`（分句 → 有界并发 TTS → 按 seq 有序发送 → 等 `playback.done`）。
 
 Emotion detection: **双路径融合** — SenseVoice SER 语音情绪优先，fallback 文本关键词 (`_EMOTION_KEYWORDS` + `_SPEECH_EMOTION_MAP`)。State-driven expressions: listening→neutral, processing→thinking, interrupted→surprised。
 
@@ -161,7 +165,7 @@ Drop a Python file into `backend/tools/user_tools/` — auto-discovered. Inherit
 - **Network**: HF via `hf-mirror.com`, Edge-TTS needs no auth. Models cached in `resources/models/` (gitignored).
 - **Git**: Feature branches `phase{N}-{name}` from `master`. Run tests before committing.
 - **Gitignored**: `resources/models/`, `resources/test_audio/tts_output_*`, `config.user.yaml`, `backend/tools/user_tools/*`
-- **ffmpeg**: Required by `pydub` for MP3→WAV conversion. Install via `winget install ffmpeg` on Windows.
+- **ffmpeg**: funasr/torchaudio 依赖系统 ffmpeg；TTS 链路已不需要（MP3 直传前端解码）。
 
 ## Project Status
 
