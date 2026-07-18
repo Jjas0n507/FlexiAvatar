@@ -206,10 +206,24 @@ async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) 
         })
         return
 
+    # 回复中不接新文字（语音路径由状态机天然门控，这里补同等门卫）
+    if session_manager.state != SessionState.IDLE:
+        logger.info(f"chat.text 忽略（当前状态 {session_manager.state.value}）")
+        await send_to(client_id, {
+            "type": "error",
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "payload": {"code": "BUSY", "message": "正在回复中，请稍候或先打断", "recoverable": True},
+        })
+        return
+
     await session_manager.transition("vad_speech_start", reason="text_input")
     await session_manager.transition("vad_speech_end", reason="text_input")
     await session_manager.transition("processing_done", reason="text_input")
-    await pipeline.respond(text)
+    # 关键: respond() 内部要等前端 playback.done，而 done 只能从本 WS 接收循环
+    # 读出。若在此 await respond()，接收循环被堵死 → done 永远读不到 → 必超时
+    # （文字聊天曾因此 100% 假超时）。与语音路径一致，作为后台任务运行。
+    asyncio.create_task(pipeline.respond(text))
 
 
 async def handle_ping(client_id: str, payload: dict) -> None:

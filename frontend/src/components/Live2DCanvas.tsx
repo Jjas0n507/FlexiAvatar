@@ -437,21 +437,27 @@ const Live2DCanvas: React.FC = () => {
         m.prev = 0;
 
         await new Promise<void>((resolve) => {
-          finishCurrent = resolve;
-          el.onended = () => {
-            console.log("[Audio] ended");
+          let done = false;
+          const finish = (reason: string) => {
+            if (done) return;
+            done = true;
+            clearTimeout(watchdog);
+            if (reason === "ended") console.log("[Audio] ended");
+            else console.warn(`[Audio] finish: ${reason}`);
             resolve();
           };
-          el.onerror = () => {
-            console.error("[Audio] media error:", el.error?.code, el.error?.message);
-            resolve();
-          };
+          // 看门狗: onended 偶发丢失会永久卡死泵（后续段全部不播 = 听感截断），
+          // 播到 时长+750ms 仍未 ended 就强制放行
+          const watchdog = setTimeout(
+            () => finish("watchdog (onended lost?)"),
+            decoded.duration * 1000 + 750,
+          );
+          finishCurrent = () => finish("stopped");
+          el.onended = () => finish("ended");
+          el.onerror = () => finish(`media error ${el.error?.code ?? "?"} ${el.error?.message ?? ""}`);
           el.play()
             .then(() => console.log("[Audio] playing"))
-            .catch((e) => {
-              console.error("[Audio] play() rejected:", e);
-              resolve();
-            });
+            .catch((e) => finish(`play() rejected: ${e}`));
         });
         finishCurrent = null;
         clearSamples();
