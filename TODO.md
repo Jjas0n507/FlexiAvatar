@@ -2,7 +2,7 @@
 
 > 对照 `DESIGN_AND_PLAN.md` 阶段 1-3，记录未完成项、可选跳过项、优化机会。
 > 标记说明: ❌ 未做 | ⚠️ 部分/可优化 | 📦 属于后续阶段 | ✅ 已完成
-> 最后核对：2026-07-19
+> 最后核对：2026-07-25
 
 ---
 
@@ -47,6 +47,7 @@
 - **`backend/llm/ollama_adapter.py`** — 已实现且为当前主力（Docker 内 qwen2.5:7b）。
 - **LLM 后端切换** — 已工厂化（`adapters.py::create_llm`），config 切换 openai/ollama。
 - **流式 TTS 首句策略** — `Segmenter` 已实现（`min_segment_length=15` + 首句宽标点集提前切）。
+- **Persona 配置化性格系统** — `backend/llm/persona.py`（XML 七层结构化 prompt），`config.user.yaml` 覆盖 persona 段换人设不改代码；`motion_controller.py` 支持 `emotion_expression_map` 覆盖。✅ 2026-07-25
 
 ### ❌ 缺失
 

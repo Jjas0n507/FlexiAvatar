@@ -1,23 +1,31 @@
 # 当前开发状态
 
 > ⚠️ 此文件记录**动态**信息，每次切换工作内容时更新。
-> 最后更新：2026-07-19
+> 最后更新：2026-07-25
 
 ## 当前位置
 
-- **分支**: `phase-cosyvoice-tuning`（master 已并入 PR #4 语音重做 + pixi 渲染器）
-- **阶段**: CosyVoice2 本地音色克隆启用 + playback.done 上行链路定案
-- **进度**: 全链路 E2E 通过（后端首次出现 `Playback confirmed by frontend`）；待用户听感验收 → Dockerfile 固化 + 依赖清理 → push + PR
+- **分支**: `master`
+- **阶段**: Persona 配置化性格系统已完成；CosyVoice2 本地音色克隆 + playback.done 上行链路定案
+- **进度**: 性格设置 0→1（`config.user.yaml` 覆盖 persona 段，换人设不改代码）；待用户听感验收 → 后续记忆系统
 
 ## 最近提交
 
 ```
+a8e0b50 feat(persona): 可替换性格设置 — system prompt 模板化 + emotion map 覆盖
+5a492d7 Merge pull request #5 from Jjas0n507/phase-cosyvoice-tuning
 d04cf27 fix: playback.done 双重上行断路 — 后端接收循环自死锁 + 前端孤儿 socket
-76dfa5f fix: 重模型适配器进程单例 + TTS 启动预加载
-1ce215d Merge pull request #4 (phase-pixi-renderer: 语音重做 + FPS 定案)
 ```
 
 ## 本轮核心变化
+
+### Persona 配置化性格系统（2026-07-25）
+
+- `backend/llm/persona.py`: `build_system_prompt()` XML 七层结构化 prompt 组装
+- `config.default.yaml`: 新增 `persona` 配置段（默认小助手人设）
+- `config.user.yaml` 覆盖即可换人设，**不改代码**；空时回退 `llm.system_prompt`
+- `motion_controller.py`: `detect_emotion()` + `MotionController` 支持 `emotion_expression_map` 覆盖（如傲娇人设 `happy→smug`）
+- README 新增 persona 字段说明 + 傲娇猫娘完整示例
 
 ### CosyVoice2 激活（config 切换，edge-tts 保留为零 GPU 备选）
 
@@ -42,3 +50,5 @@ d04cf27 fix: playback.done 双重上行断路 — 后端接收循环自死锁 + 
 3. **preload.js 加载失败**（ESM/CJS 冲突），当前功能未依赖 preload，影响面待查
 
 详见 `NEXT.md` / `TODO.md`。
+
+## 上一轮核心变化

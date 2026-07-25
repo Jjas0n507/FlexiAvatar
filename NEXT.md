@@ -1,16 +1,17 @@
 # 下一步行动
 
 > ⚠️ 此文件记录**短期**待办，完成后划掉或删除。
-> 最后更新：2026-07-19
+> 最后更新：2026-07-25
 
 ## 当前优先级
 
 ### 🆕 新需求（2026-07-19 用户提出）
 
 - [ ] **美化页面、优化交互**: UI 视觉打磨 + 交互体验（可与 Phase 6 的对话气泡/设置面板合并推进）
-- [ ] **记忆、性格设置**: 跨会话长期记忆 + 人设/性格可配置（system prompt 模板化，后续接设置 UI）
+- [x] **性格设置**: 人设/性格可配置（`config.user.yaml` 覆盖 persona 段，system prompt 模板化 + emotion map 覆盖）✅ 2026-07-25
+- [ ] **记忆**: 跨会话长期记忆（sqlite + embedding 检索，见 `docs/voice-interaction-upgrade-plan.md` Phase E）
 - [ ] **配置必需工具**: 时间、日期等内置工具落地（`backend/tools/builtin/` 目录待建，工具注册/调用链路已就绪）
-- [ ] **说话不能带表情等**: LLM 回复混入 emoji/颜文字/Markdown 符号会被 TTS 念出、干扰分句与口型 → system prompt 约束 + TTS 合成前文本清洗双保险
+- [ ] **说话不能带表情等**: LLM 回复混入 emoji/颜文字/Markdown 符号会被 TTS 念出、干扰分句与口型 → system prompt 约束 + TTS 合成前文本清洗双保险（persona 的 `<SpeakingStyle>` 层已含 TTS 约束）
 
 ### 🔴 高优先级
 
