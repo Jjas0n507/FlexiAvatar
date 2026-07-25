@@ -49,7 +49,7 @@ gpu:
 
 # ── 语音合成 ────────────────────────────────
 tts:
-  engine: "edge-tts"             # edge-tts | cosyvoice2
+  engine: "edge-tts"             # edge-tts | cosyvoice2 | gpt-sovits
   edge_tts:
     voice: "zh-CN-XiaoxiaoNeural"
     speed: "+10%"
@@ -62,6 +62,20 @@ tts:
     ref_text: ""                             # 参考音频的逐字文本
     speed: 1.0
     fp16: true                               # gfx1030 实测 RTF 0.91（fp32 为 1.59）
+  # GPT-SoVITS 本地引擎（零样本克隆 + 微调权重双模式）
+  # 换音色: 零样本换 ref_audio/ref_text；微调换 gpt_weights/sovits_weights
+  # 依赖: git clone https://github.com/RVC-Boss/GPT-SoVITS /opt/GPT-SoVITS
+  gpt_sovits:
+    root: ""                     # GPT-SoVITS 安装路径，空 = /opt/GPT-SoVITS（Docker）
+    pretrained_dir: "resources/models/GPT-SoVITS"   # 基座预训练权重（自动下载）
+    ref_audio: "resources/voices/ref.wav"
+    ref_text: ""
+    ref_language: "zh"           # 参考音频语言: zh / ja / en / ko / yue
+    gpt_weights: ""              # 空=零样本模式；填路径=微调权重（.ckpt）
+    sovits_weights: ""           # 空=零样本模式；填路径=微调权重（.pth）
+    device: "cpu"                # cpu / cuda（ROCm 用 cuda）
+    is_half: false               # fp16 推理（仅 CUDA/ROCm 有效）
+    speed: 1.0
   # Phase B: 流式分句 TTS（LLM 边出字边合成）
   streaming:
     min_segment_length: 15       # 首句成句最小字数

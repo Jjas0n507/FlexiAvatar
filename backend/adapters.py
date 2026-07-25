@@ -85,4 +85,18 @@ def create_tts(config: Config):
             speed=config.get("tts.cosyvoice2.speed", 1.0),
             fp16=config.get("tts.cosyvoice2.fp16", True),
         ))
+    elif engine == "gpt-sovits":
+        from backend.tts.gpt_sovits_adapter import GptSovitsAdapter
+        return _cached("tts:gpt-sovits", lambda: GptSovitsAdapter(
+            pretrained_dir=config.get("tts.gpt_sovits.pretrained_dir", "resources/models/GPT-SoVITS"),
+            ref_audio=config.get("tts.gpt_sovits.ref_audio", "resources/voices/ref.wav"),
+            ref_text=config.get("tts.gpt_sovits.ref_text", ""),
+            ref_language=config.get("tts.gpt_sovits.ref_language", "zh"),
+            gpt_weights=config.get("tts.gpt_sovits.gpt_weights", ""),
+            sovits_weights=config.get("tts.gpt_sovits.sovits_weights", ""),
+            device=config.get("tts.gpt_sovits.device", "cpu"),
+            is_half=config.get("tts.gpt_sovits.is_half", False),
+            speed=config.get("tts.gpt_sovits.speed", 1.0),
+            root=config.get("tts.gpt_sovits.root", ""),
+        ))
     raise ValueError(f"Unknown TTS engine: {engine}")
