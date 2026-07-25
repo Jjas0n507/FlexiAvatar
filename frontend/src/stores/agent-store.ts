@@ -19,6 +19,8 @@ import type {
   TTSSpeechPayload,
 } from "../types";
 
+export type AppPhase = "startup" | "loading" | "ready";
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool";
@@ -28,6 +30,10 @@ export interface ChatMessage {
 }
 
 export interface AgentState {
+  // 应用阶段
+  appPhase: AppPhase;
+  setAppPhase: (phase: AppPhase) => void;
+
   // 连接
   wsConnected: boolean;
   setWsConnected: (connected: boolean) => void;
@@ -78,6 +84,10 @@ export interface AgentState {
 
 export const useAgentStore = create<AgentState>()(
   subscribeWithSelector((set, get) => ({
+  // 应用阶段
+  appPhase: "startup",
+  setAppPhase: (phase) => set({ appPhase: phase }),
+
   // 连接
   wsConnected: false,
   setWsConnected: (connected) => set({ wsConnected: connected }),

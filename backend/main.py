@@ -224,6 +224,9 @@ async def handle_chat_text(client_id: str, payload: dict, websocket: WebSocket) 
     await session_manager.transition("vad_speech_start", reason="text_input")
     await session_manager.transition("vad_speech_end", reason="text_input")
     await session_manager.transition("processing_done", reason="text_input")
+    # 清空输入队列中的残留音频帧，防止进入 SPEAKING 后 VAD 误判为打断
+    # （语音路径在 run() 的 vad_speech_end 后做了同样的 flush）
+    pipeline._flush_queue()
     # 关键: respond() 内部要等前端 playback.done，而 done 只能从本 WS 接收循环
     # 读出。若在此 await respond()，接收循环被堵死 → done 永远读不到 → 必超时
     # （文字聊天曾因此 100% 假超时）。与语音路径一致，作为后台任务运行。

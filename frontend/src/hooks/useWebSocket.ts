@@ -139,6 +139,8 @@ export function useWebSocket() {
 
   // 暴露方法
   const sendText = useCallback((text: string) => {
+    // 用户文字消息入库，与 ASR 最终结果路径一致（setCurrentASRText isFinal→addMessage）
+    useAgentStore.getState().addMessage({ role: "user", text });
     wsClient.sendTextChat(text);
   }, []);
 

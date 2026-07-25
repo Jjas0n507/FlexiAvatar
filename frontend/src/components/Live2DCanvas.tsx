@@ -392,6 +392,26 @@ const Live2DCanvas: React.FC = () => {
     el.preload = "auto";
     const mouth = mouthRef.current; // 稳定模块对象，非 DOM 节点
     mouth.el = el;
+
+    // 预热音频输出管线：Chromium 首次 <audio> 播放需初始化系统音频设备，
+    // 期间 currentTime 正常推进（口型有值）但实际无声音输出。
+    // 播放 50ms 静音 WAV 触发管线初始化，消除首句前几个字的无声问题。
+    (async () => {
+      try {
+        const sr = 24000, ms = 50, n = Math.floor(sr * ms / 1000), ds = n * 2;
+        const buf = new ArrayBuffer(44 + ds); const v = new DataView(buf);
+        const w = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+        w(0, 'RIFF'); v.setUint32(4, 36 + ds, true); w(8, 'WAVE');
+        w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+        v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+        w(36, 'data'); v.setUint32(40, ds, true);
+        const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+        el.src = url; await el.play(); el.pause(); el.currentTime = 0;
+        URL.revokeObjectURL(url);
+        console.log('[Audio] pipeline primed');
+      } catch { /* 静默失败，不影响后续播放 */ }
+    })();
+
     const decodeCtx = new OfflineAudioContext(1, 1, 44100);
     let currentUrl: string | null = null;
     let finishCurrent: (() => void) | null = null;
@@ -578,6 +598,161 @@ const Live2DCanvas: React.FC = () => {
 
     return unsub;
   }, [setExpression]);
+
+  // ── 交互：拖拽 / 缩放 / 眼神跟随 ──────────────
+
+  const interactRef = useRef<{
+    state: "idle" | "pressing" | "dragging" | "tracking";
+    startX: number;
+    startY: number;
+    modelStartX: number;
+    modelStartY: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({ state: "idle", startX: 0, startY: 0, modelStartX: 0, modelStartY: 0, timer: null });
+  // 最近一次 pointer 坐标，用于进入 tracking 时立即 focus（不等 pointermove）
+  const lastPointerRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    if (loadState !== "loaded") return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const interact = interactRef.current;
+    const DRAG_THRESHOLD = 5;
+    const LONG_PRESS_MS = 1200;
+    const ZOOM_STEP = 0.05;
+    const ZOOM_MIN = 0.5;
+    const ZOOM_MAX = 2.5;
+    const getModel = () => modelRef.current;
+
+    // 退出眼神跟随：直调 FocusController 回正，绕过 model.focus() 的 atan2 转换
+    const exitTracking = () => {
+      interact.state = "idle";
+      container.style.cursor = "";
+      const model = getModel();
+      // ponytail: Live2DModel.focus() 内部 atan2/cos/sin 转换期望世界空间像素坐标，
+      // 归一化值应直调 focusController.focus()
+      if (model) model.internalModel.focusController.focus(0, 0);
+    };
+
+    // 判断事件是否发生在 UI 元素上（聊天面板、顶栏等）
+    const isOnUI = (e: Event) => {
+      const el = e.target as HTMLElement;
+      return !!(el.closest(".chat-panel") || el.closest(".topbar") || el.closest(".start-screen"));
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (isOnUI(e)) return;
+      if (interact.state === "tracking") {
+        exitTracking();
+        return;
+      }
+      const model = getModel();
+      if (!model) return;
+      interact.state = "pressing";
+      interact.startX = e.clientX;
+      interact.startY = e.clientY;
+      interact.modelStartX = model.position.x;
+      interact.modelStartY = model.position.y;
+      container.setPointerCapture(e.pointerId);
+      interact.timer = setTimeout(() => {
+        if (interact.state === "pressing") {
+          interact.state = "tracking";
+          container.style.cursor = "crosshair";
+          // 进入 tracking 立即看向当前鼠标位置（不等 pointermove）
+          const model = getModel();
+          if (model) {
+            const rect = container.getBoundingClientRect();
+            const p = lastPointerRef.current;
+            const nx = ((p.x - rect.left) / rect.width) * 2 - 1;
+            const ny = ((p.y - rect.top) / rect.height) * 2 - 1;
+            const cx = Math.max(-0.8, Math.min(0.8, nx));
+            const cy = Math.max(-0.8, Math.min(0.8, -ny));
+            model.internalModel.focusController.focus(cx, cy);
+          }
+        }
+      }, LONG_PRESS_MS);
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      lastPointerRef.current = { x: e.clientX, y: e.clientY };
+      if (isOnUI(e)) return;
+      const model = getModel();
+      if (!model) return;
+
+      if (interact.state === "pressing") {
+        const dx = e.clientX - interact.startX;
+        const dy = e.clientY - interact.startY;
+        if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+          if (interact.timer) { clearTimeout(interact.timer); interact.timer = null; }
+          interact.state = "dragging";
+          container.style.cursor = "grabbing";
+        }
+      }
+
+      if (interact.state === "dragging") {
+        model.position.x = interact.modelStartX + (e.clientX - interact.startX);
+        model.position.y = interact.modelStartY + (e.clientY - interact.startY);
+      }
+
+      if (interact.state === "tracking") {
+        const rect = container.getBoundingClientRect();
+        const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+        const cx = Math.max(-0.8, Math.min(0.8, nx));
+        const cy = Math.max(-0.8, Math.min(0.8, -ny));
+        model.internalModel.focusController.focus(cx, cy);
+      }
+    };
+
+    const onPointerUp = () => {
+      if (interact.timer) { clearTimeout(interact.timer); interact.timer = null; }
+      if (interact.state === "dragging" || interact.state === "pressing") {
+        interact.state = "idle";
+        container.style.cursor = "";
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (isOnUI(e)) return;
+      const model = getModel();
+      if (!model) return;
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+      const s = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, model.scale.x + delta));
+      model.scale.set(s);
+    };
+
+    const onDblClick = (e: MouseEvent) => {
+      if (isOnUI(e)) return;
+      fitRef.current?.();
+      if (interact.state === "tracking") exitTracking();
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && interact.state === "tracking") exitTracking();
+    };
+
+    container.addEventListener("pointerdown", onPointerDown);
+    container.addEventListener("pointermove", onPointerMove);
+    container.addEventListener("pointerup", onPointerUp);
+    container.addEventListener("pointercancel", onPointerUp);
+    container.addEventListener("wheel", onWheel, { passive: false });
+    container.addEventListener("dblclick", onDblClick);
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      if (interact.timer) { clearTimeout(interact.timer); interact.timer = null; }
+      container.removeEventListener("pointerdown", onPointerDown);
+      container.removeEventListener("pointermove", onPointerMove);
+      container.removeEventListener("pointerup", onPointerUp);
+      container.removeEventListener("pointercancel", onPointerUp);
+      container.removeEventListener("wheel", onWheel);
+      container.removeEventListener("dblclick", onDblClick);
+      window.removeEventListener("keydown", onKeyDown);
+      container.style.cursor = "";
+    };
+  }, [loadState]);
 
   // ── 渲染 ──────────────────────────────────────
 

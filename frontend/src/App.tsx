@@ -1,127 +1,124 @@
 /**
  * 主应用组件
  *
- * 渲染 Live2D 画布（占位）、状态指示器、对话气泡、调试控制台。
+ * 阶段管理：
+ *   startup  → StartScreen（未连接 WS，不加载模型）
+ *   loading  → 连接 WS + 加载模型，StartScreen 遮罩
+ *   ready    → 主界面，自动开麦，VAD 驱动语音交互
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useAudioPlayback } from "./hooks/useAudioPlayback";
 import { useMicCapture } from "./hooks/useMicCapture";
-import { StatusIndicator } from "./components/StatusIndicator";
-import { ChatBubble } from "./components/ChatBubble";
 import Live2DCanvas from "./components/Live2DCanvas";
+import StartScreen from "./components/StartScreen";
+import TopBar from "./components/TopBar";
+import ChatPanel from "./components/ChatPanel";
 import { useAgentStore } from "./stores/agent-store";
 import "./App.css";
 
+const CONNECT_TIMEOUT_MS = 15_000;
+const MIN_LOADING_MS = 600;
+
 const App: React.FC = () => {
-  const { isConnected, sendText, sendInterrupt } = useWebSocket();
+  const appPhase = useAgentStore((s) => s.appPhase);
+  const lastError = useAgentStore((s) => s.lastError);
+  const setAppPhase = useAgentStore((s) => s.setAppPhase);
+  const setLastError = useAgentStore((s) => s.setLastError);
+
+  const handleStart = () => {
+    setLastError(null);
+    setAppPhase("loading");
+  };
+
+  const handleRetry = () => {
+    setLastError(null);
+    setAppPhase("loading");
+  };
+
+  if (appPhase === "startup") {
+    return (
+      <div className="app-container">
+        <StartScreen
+          phase={lastError ? "error" : "startup"}
+          error={lastError ?? undefined}
+          onStart={handleStart}
+          onRetry={handleRetry}
+        />
+      </div>
+    );
+  }
+
+  return <MainApp onRetry={handleRetry} />;
+};
+
+// ── MainApp（仅在非 startup 阶段挂载）──
+
+const MainApp: React.FC<{ onRetry: () => void }> = ({ onRetry }) => {
+  const { isConnected, sendText } = useWebSocket();
   useAudioPlayback();
-  const { startMic, stopMic, isRecording } = useMicCapture();
+  const { startMic, isRecording } = useMicCapture();
+
+  const appPhase = useAgentStore((s) => s.appPhase);
+  const setAppPhase = useAgentStore((s) => s.setAppPhase);
   const sessionState = useAgentStore((s) => s.sessionState);
-  const availableTools = useAgentStore((s) => s.availableTools);
-  const [inputText, setInputText] = useState("");
-  const [showDebug, setShowDebug] = useState(true);
+  const setLastError = useAgentStore((s) => s.setLastError);
 
-  const handleSendText = () => {
-    if (!inputText.trim()) return;
-    sendText(inputText.trim());
-    setInputText("");
-  };
+  const connectStartRef = useRef(Date.now());
+  const micStartedRef = useRef(false);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSendText();
-    }
-  };
+  // ── loading → ready 转换 ──────────────────
+
+  useEffect(() => {
+    if (appPhase !== "loading") return;
+    if (!isConnected) return;
+    if (sessionState !== "idle") return;
+
+    const elapsed = Date.now() - connectStartRef.current;
+    const remaining = Math.max(0, MIN_LOADING_MS - elapsed);
+    const timer = setTimeout(() => setAppPhase("ready"), remaining);
+    return () => clearTimeout(timer);
+  }, [appPhase, isConnected, sessionState, setAppPhase]);
+
+  // ── 连接超时 ──────────────────────────────
+
+  useEffect(() => {
+    if (appPhase !== "loading") return;
+    const timer = setTimeout(() => {
+      const s = useAgentStore.getState();
+      if (s.appPhase === "loading" && !s.wsConnected) {
+        setLastError("无法连接到后端，请确认服务已启动");
+        setAppPhase("startup");
+      }
+    }, CONNECT_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [appPhase, setAppPhase, setLastError]);
+
+  // ── ready 后自动开麦 ──────────────────────
+
+  useEffect(() => {
+    if (appPhase !== "ready") return;
+    if (isRecording) return;
+    if (micStartedRef.current) return;
+    micStartedRef.current = true;
+
+    startMic().catch(() => {
+      console.warn("[App] 麦克风启动失败，仍可使用文字对话");
+    });
+  }, [appPhase, isRecording, startMic]);
+
+  // ── 渲染 ──────────────────────────────────
 
   return (
     <div className="app-container">
-      {/* Live2D 角色渲染 */}
       <Live2DCanvas />
+      <TopBar />
+      <ChatPanel onSend={sendText} />
 
-      {/* 状态指示器 */}
-      <StatusIndicator />
-
-      {/* 对话气泡 */}
-      <ChatBubble />
-
-      {/* 底部控制栏 */}
-      <div className="control-bar">
-        {/* 打断按钮 */}
-        <button
-          className={`interrupt-btn ${
-            sessionState === "speaking" || sessionState === "processing"
-              ? "active"
-              : ""
-          }`}
-          onClick={sendInterrupt}
-          disabled={
-            sessionState !== "speaking" && sessionState !== "processing"
-          }
-          title="打断 AI"
-        >
-          ⏹ 打断
-        </button>
-
-        {/* 麦克风按钮 */}
-        <button
-          className={`mic-btn ${isRecording ? "active" : ""}`}
-          onClick={isRecording ? stopMic : startMic}
-          title={isRecording ? "停止录音" : "开始录音"}
-        >
-          {isRecording ? "🔴 停止" : "🎤 说话"}
-        </button>
-
-        {/* 文字输入 (调试用) */}
-        <div className="text-input-group">
-          <input
-            type="text"
-            className="text-input"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入文字对话（调试模式）..."
-          />
-          <button className="send-btn" onClick={handleSendText}>
-            发送
-          </button>
-        </div>
-      </div>
-
-      {/* 调试面板 */}
-      {showDebug && (
-        <div className="debug-panel">
-          <div className="debug-header">
-            <span>调试面板</span>
-            <button onClick={() => setShowDebug(false)}>收起</button>
-          </div>
-          <div className="debug-content">
-            <div>
-              <strong>WebSocket:</strong>{" "}
-              <span className={isConnected ? "status-ok" : "status-err"}>
-                {isConnected ? "已连接" : "未连接"}
-              </span>
-            </div>
-            <div>
-              <strong>会话状态:</strong> {sessionState}
-            </div>
-            <div>
-              <strong>已加载工具:</strong>{" "}
-              {availableTools.length > 0
-                ? availableTools.join(", ")
-                : "(无)"}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 显示/隐藏调试面板按钮 */}
-      {!showDebug && (
-        <button className="debug-toggle" onClick={() => setShowDebug(true)}>
-          ☰
-        </button>
+      {/* loading 遮罩 */}
+      {appPhase === "loading" && (
+        <StartScreen phase="loading" onStart={() => {}} onRetry={onRetry} />
       )}
     </div>
   );
