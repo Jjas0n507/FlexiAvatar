@@ -17,6 +17,7 @@ from openai import AsyncOpenAI
 
 from backend.llm.base import BaseLLM, Message, ToolDefinition, LLMChunk
 from backend.config import config
+from backend.llm.persona import build_system_prompt
 
 logger = logging.getLogger("llm.openai")
 
@@ -198,7 +199,7 @@ class OpenAIAdapter(BaseLLM):
         4. 循环直到无 tool_call 或达到 max_rounds
         """
         local_messages = list(messages)  # 不修改原始消息列表
-        system_prompt = config.get("llm.system_prompt", "")
+        system_prompt = build_system_prompt(config.get("persona"))
         if system_prompt and not any(m.role == "system" for m in local_messages):
             local_messages.insert(0, Message(role="system", content=system_prompt))
 

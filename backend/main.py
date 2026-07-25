@@ -50,7 +50,11 @@ try:
     model_dir = config.get("live2d.model_dir", "")
     if model_dir:
         model_profile = ModelProfile.load(model_dir)
-        motion_controller = MotionController(profile=model_profile)
+        persona = config.get("persona") or {}
+        motion_controller = MotionController(
+            profile=model_profile,
+            emotion_expression_map=persona.get("emotion_expression_map") or None,
+        )
         logger.info(f"ModelProfile loaded: {model_profile.name}")
     else:
         model_profile = None

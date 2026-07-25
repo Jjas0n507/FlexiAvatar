@@ -52,7 +52,8 @@ _SPEECH_EMOTION_MAP: dict[str, str] = {
 }
 
 
-def detect_emotion(text: str, speech_emotion: str | None = None) -> str:
+def detect_emotion(text: str, speech_emotion: str | None = None,
+                   emotion_map: dict[str, str] | None = None) -> str:
     """
     从文本和语音情绪中检测最终情绪。
 
@@ -62,13 +63,16 @@ def detect_emotion(text: str, speech_emotion: str | None = None) -> str:
     Args:
         text: 待检测的文本
         speech_emotion: SenseVoice 识别的语音情绪，None 表示无语音情绪输入
+        emotion_map: 可选的情绪映射覆盖（persona.emotion_expression_map），
+                     None 时使用模块级 _SPEECH_EMOTION_MAP
 
     Returns:
         emotion name: "happy"/"angry"/"sad"/"surprised"/"thinking"/"neutral"
     """
+    effective_map = emotion_map if emotion_map is not None else _SPEECH_EMOTION_MAP
     # 优先使用语音情绪
     if speech_emotion and speech_emotion != "neutral":
-        mapped = _SPEECH_EMOTION_MAP.get(speech_emotion, speech_emotion)
+        mapped = effective_map.get(speech_emotion, speech_emotion)
         if mapped != "neutral":
             return mapped
 
@@ -124,14 +128,20 @@ class MotionController:
         cmd = ctrl.get_interrupt_command()
     """
 
-    def __init__(self, profile: "ModelProfile | None" = None):
+    def __init__(self, profile: "ModelProfile | None" = None,
+                 emotion_expression_map: dict[str, str] | None = None):
         self.profile = profile
+        # 合并 persona 的表情覆盖到内置 SER→Live2D 映射表
+        self._emotion_map = dict(_SPEECH_EMOTION_MAP)
+        if emotion_expression_map:
+            self._emotion_map.update(emotion_expression_map)
 
     # ── 表情生成 ──────────────────────────────────
 
     def get_expression_for_text(self, text: str, speech_emotion: str | None = None) -> ExpressionCommand:
         """根据文本内容决定表情，可选传入语音情绪以覆盖文本检测"""
-        emotion = detect_emotion(text, speech_emotion=speech_emotion)
+        emotion = detect_emotion(text, speech_emotion=speech_emotion,
+                                 emotion_map=self._emotion_map)
         intensity_map = {
             "neutral": 0.0,
             "happy": 0.8,

@@ -28,6 +28,7 @@ from backend.adapters import create_vad, create_asr, create_llm, create_tts
 from backend.audio.segmenter import Segmenter
 from backend.live2d.motion_controller import MotionController
 from backend.llm.base import Message
+from backend.llm.persona import build_system_prompt
 
 logger = logging.getLogger("pipeline")
 
@@ -90,7 +91,7 @@ class AudioPipeline:
                 self._motion = MotionController()  # fallback: 无外部注入时自建
 
             # 初始化对话历史
-            system_prompt = config.get("llm.system_prompt", "")
+            system_prompt = build_system_prompt(config.get("persona"))
             if system_prompt:
                 self._history = [Message(role="system", content=system_prompt)]
 
