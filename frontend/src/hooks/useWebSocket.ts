@@ -10,6 +10,11 @@ import { wsClient } from "../services/ws-client";
 import { useAgentStore } from "../stores/agent-store";
 import type { WSMessage, SessionState, ModelProfile, TTSSpeechPayload } from "../types";
 
+// ponytail: 文本缓冲 — 延迟到首段 TTS 音频到达才显示，避免 SoVITS 高延迟下文字全出而语音未播
+let _pendingText = "";
+let _textShown = false;
+let _pendingLastChunk = false;
+
 export function useWebSocket() {
   const {
     setWsConnected,
@@ -37,6 +42,15 @@ export function useWebSocket() {
         if (payload.tools) {
           setAvailableTools(payload.tools as string[]);
         }
+        // 语音播放结束 → 将流式文本转为永久消息
+        if (payload.state === "idle" && _pendingLastChunk) {
+          const finalText = useAgentStore.getState().streamingText;
+          if (finalText) {
+            addMessage({ role: "assistant", text: finalText });
+            useAgentStore.getState().setStreamingText("");
+          }
+          _pendingLastChunk = false;
+        }
       })
     );
 
@@ -51,7 +65,8 @@ export function useWebSocket() {
       })
     );
 
-    // LLM 流式输出
+    // LLM 流式输出 — 缓冲到首段 TTS 音频到达再显示，避免文字全出语音未播
+    let _flushTimer: ReturnType<typeof setTimeout> | null = null;
     unsubs.push(
       wsClient.on("llm.stream", (msg: WSMessage) => {
         const payload = msg.payload as Record<string, unknown>;
@@ -60,17 +75,34 @@ export function useWebSocket() {
         const isLastChunk = payload.isLastChunk as boolean;
 
         if (isFirstChunk) {
-          // 开始新的 assistant 消息
-          useAgentStore.getState().setStreamingText(text);
+          _pendingText = text;
+          _textShown = false;
+          _pendingLastChunk = false;
+          if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
+        } else if (!_textShown) {
+          _pendingText += text;
         } else {
           appendStreamingText(text);
         }
 
         if (isLastChunk) {
-          // 完成：将流式文本转为消息
-          const finalText = useAgentStore.getState().streamingText;
-          addMessage({ role: "assistant", text: finalText });
-          useAgentStore.getState().setStreamingText("");
+          if (!_textShown) {
+            _pendingLastChunk = true;
+            // 兜底：5s 内无音频到达 → 直接显示文本（TTS 可能失败）
+            _flushTimer = setTimeout(() => {
+              if (!_textShown && _pendingText) {
+                useAgentStore.getState().setStreamingText(_pendingText);
+                _textShown = true;
+                addMessage({ role: "assistant", text: _pendingText });
+                useAgentStore.getState().setStreamingText("");
+                _pendingLastChunk = false;
+              }
+            }, 5000);
+          } else {
+            const finalText = useAgentStore.getState().streamingText;
+            addMessage({ role: "assistant", text: finalText });
+            useAgentStore.getState().setStreamingText("");
+          }
         }
       })
     );
@@ -104,11 +136,19 @@ export function useWebSocket() {
       })
     );
 
-    // TTS audio (Phase A: 修正消息类型与后端一致)
+    // TTS audio — 首段到达时 flush 缓冲的 LLM 文本（文字与语音同步，解码/播放延迟自然提供 ~0.2s 领先）
     unsubs.push(
       wsClient.on("tts.audio", (msg: WSMessage) => {
         const payload = msg.payload as unknown as TTSSpeechPayload;
         console.log(`[WS] tts.audio seq=${payload.seq} fmt=${payload.format} b64len=${payload.audio?.length ?? 0}`);
+
+        if (!_textShown && _pendingText) {
+          if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
+          useAgentStore.getState().setStreamingText(_pendingText);
+          _textShown = true;
+          // 若 LLM 已结束 → 不立即 finalize，等 state→idle（播放完毕）再转消息
+        }
+
         setTtsSpeech(payload);
       })
     );
