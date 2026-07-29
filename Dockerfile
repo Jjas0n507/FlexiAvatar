@@ -56,7 +56,7 @@ RUN git init /opt/GPT-SoVITS \
     && git remote add origin https://github.com/RVC-Boss/GPT-SoVITS.git \
     && git fetch --depth 1 origin refs/tags/${GPTSOVITS_REF} \
     && git checkout FETCH_HEAD \
-    && grep -vE "^--extra-index|^torch|^torchaudio|tensorrt|deepspeed|onnxruntime-gpu" requirements.txt > /tmp/gptsovits-req.txt \
+    && grep -vE "^--extra-index|^torch|^torchaudio|tensorrt|deepspeed|onnxruntime-gpu|^funasr" requirements.txt > /tmp/gptsovits-req.txt \
     && pip install --no-cache-dir -r /tmp/gptsovits-req.txt \
        onnxruntime==1.23.2 \
     && rm /tmp/gptsovits-req.txt \
@@ -64,7 +64,15 @@ RUN git init /opt/GPT-SoVITS \
 
 # sys.path 注入
 RUN SP=$(python -c "import site; print(site.getsitepackages()[0])") \
-    && printf '%s\n' "/opt/GPT-SoVITS/GPT_SoVITS" > "$SP/gptsovits.pth"
+    && printf '%s\n%s\n' "/opt/GPT-SoVITS" "/opt/GPT-SoVITS/GPT_SoVITS" > "$SP/gptsovits.pth"
+
+# torchaudio.load → soundfile 补丁（ROCm 镜像缺 TorchCodec）
+COPY scripts/patch-gptsovits-load-wav.py /tmp/
+RUN python /tmp/patch-gptsovits-load-wav.py && rm /tmp/patch-gptsovits-load-wav.py
+
+# GPT-SoVITS 运行时依赖预下载（BERT/Hubert/FastLangDetect/G2PW 由 adapter 首次加载时下载）
+RUN python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=True); nltk.download('cmudict', quiet=True)" \
+    && mkdir -p /opt/GPT-SoVITS/GPT_SoVITS/pretrained_models/fast_langdetect
 
 # 注意: ROCm GPU 验证在运行时进行（docker compose up 时挂载 /dev/kfd /dev/dri）
 # 构建时不验证（docker build 没有 GPU 设备）

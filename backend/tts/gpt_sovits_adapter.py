@@ -85,15 +85,18 @@ class GptSovitsAdapter(BaseTTS):
             await asyncio.to_thread(self._load_blocking)
 
     def _load_blocking(self):
-        if self._pkg_path not in sys.path:
-            sys.path.insert(0, self._pkg_path)
+        for p in (self._root, self._pkg_path):
+            if p not in sys.path:
+                sys.path.insert(0, p)
 
-        try:
-            from inference_webui import change_gpt_weights, change_sovits_weights  # noqa: F401
-        except ImportError as e:
-            raise RuntimeError(_INSTALL_HINT) from e
+        # 所有相对路径 → 绝对路径（CWD 即将切换到 self._root）
+        _resolve = lambda p: str(Path(p).resolve()) if p else p
+        self._ref_audio = _resolve(self._ref_audio)
+        self._gpt_weights = _resolve(self._gpt_weights)
+        self._sovits_weights = _resolve(self._sovits_weights)
+        self._pretrained_dir = _resolve(self._pretrained_dir)
 
-        # 下载 / 定位基座预训练权重
+        # 解析权重路径（在 import 之前——inference_webui module-level 就会加载）
         gpt_path = self._gpt_weights or self._ensure_pretrained("gpt")
         sovits_path = self._sovits_weights or self._ensure_pretrained("sovits")
 
@@ -104,18 +107,49 @@ class GptSovitsAdapter(BaseTTS):
         if not Path(self._ref_audio).exists():
             raise RuntimeError(f"参考音频不存在: {self._ref_audio}")
 
-        logger.info("Loading GPT-SoVITS models...")
-        # 函数内部有全局状态；加载后 get_tts_wav 直接可用
-        change_gpt_weights(gpt_path=str(gpt_path))
-        change_sovits_weights(sovits_path=str(sovits_path))
-        self._loaded = True
-        logger.info("GPT-SoVITS ready")
+        # 下载 BERT/Hubert 预训练模型到本地（cnhubert 需要 os.path.exists）
+        pretrained = Path(self._root) / "GPT_SoVITS" / "pretrained_models"
+        pretrained.mkdir(parents=True, exist_ok=True)
+        # fast-langdetect 缓存目录（split_lang 依赖）
+        (pretrained / "fast_langdetect").mkdir(exist_ok=True)
+        bert_local = pretrained / "chinese-roberta-wwm-ext-large"
+        hubert_local = pretrained / "chinese-hubert-base"
 
-        # 热身
+        from huggingface_hub import snapshot_download
+        for local, repo in (
+            (bert_local, "hfl/chinese-roberta-wwm-ext-large"),
+            (hubert_local, "TencentGameMate/chinese-hubert-base"),
+        ):
+            if not (local / "config.json").exists():
+                logger.info(f"Downloading {repo} → {local}")
+                snapshot_download(repo, local_dir=str(local))
+
+        # inference_webui module-level 通过环境变量获取路径
+        os.environ["gpt_path"] = str(Path(gpt_path).resolve())
+        os.environ["sovits_path"] = str(Path(sovits_path).resolve())
+        os.environ["bert_path"] = str(bert_local)
+        os.environ["cnhubert_base_path"] = str(hubert_local)
+
+        # inference_webui 以 CWD 解析相对路径（weight.json 等）
+        _prev_cwd = os.getcwd()
+        os.chdir(self._root)
+
+        try:
+            from inference_webui import change_gpt_weights, change_sovits_weights  # noqa: F401
+        except ImportError as e:
+            os.chdir(_prev_cwd)
+            raise RuntimeError(_INSTALL_HINT) from e
+
+        logger.info("GPT-SoVITS models loaded")
+        self._loaded = True
+
+        # 热身（CWD 仍在 self._root）
         import time
         t0 = time.time()
         list(self._synthesize_raw("预热。"))
         logger.info(f"GPT-SoVITS warmup: {time.time() - t0:.1f}s")
+
+        os.chdir(_prev_cwd)
 
     def _ensure_pretrained(self, key: str) -> str:
         """确保预训练基座权重存在，返回本地路径。"""
@@ -148,7 +182,10 @@ class GptSovitsAdapter(BaseTTS):
 
         sr, audio = chunks[-1]  # 取最后一段（完整输出）
         if isinstance(audio, np.ndarray):
-            pcm = (audio * 32767).astype(np.int16)
+            if np.issubdtype(audio.dtype, np.floating):
+                pcm = (audio * 32767).astype(np.int16)
+            else:
+                pcm = audio.astype(np.int16)
         else:
             pcm = audio
 
@@ -168,19 +205,30 @@ class GptSovitsAdapter(BaseTTS):
 
     def _synthesize_raw(self, text: str):
         """调用 GPT-SoVITS 推理，返回 generator of (sr, audio_array)。"""
-        from inference_webui import get_tts_wav
+        from inference_webui import get_tts_wav, dict_language
 
-        return get_tts_wav(
-            ref_wav_path=self._ref_audio,
-            prompt_text=self._ref_text,
-            prompt_language=self._ref_language,
-            text=text,
-            text_language="zh",          # 输出语言，后续可从 config 控制
-            how_to_cut="不切",            # pipeline 已分句，这里不再切
-            top_p=1.0,
-            temperature=1.0,
-            speed=self._speed,
-        )
+        # 短码 → 显示名（dict_language key 是显示名，value 是短码）
+        _code_to_name = {v: k for k, v in dict_language.items()}
+        ref_lang = _code_to_name.get(self._ref_language, self._ref_language)
+        out_lang = _code_to_name.get("zh", "Chinese-English Mixed")
+
+        # GPT-SoVITS 依赖 CWD 解析所有相对路径
+        _prev = os.getcwd()
+        os.chdir(self._root)
+        try:
+            return get_tts_wav(
+                ref_wav_path=self._ref_audio,
+                prompt_text=self._ref_text,
+                prompt_language=ref_lang,
+                text=text,
+                text_language=out_lang,
+                how_to_cut="不切",
+                top_p=1.0,
+                temperature=1.0,
+                speed=self._speed,
+            )
+        finally:
+            os.chdir(_prev)
 
     async def voices(self) -> list[dict]:
         name = "微调模型" if self._gpt_weights else f"零样本克隆 ({Path(self._ref_audio).stem})"

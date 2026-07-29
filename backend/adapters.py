@@ -85,7 +85,7 @@ def create_tts(config: Config):
             speed=config.get("tts.cosyvoice2.speed", 1.0),
             fp16=config.get("tts.cosyvoice2.fp16", True),
         ))
-    elif engine == "gpt-sovits":
+    elif engine in ("gpt-sovits", "gpt_sovits"):
         from backend.tts.gpt_sovits_adapter import GptSovitsAdapter
         return _cached("tts:gpt-sovits", lambda: GptSovitsAdapter(
             pretrained_dir=config.get("tts.gpt_sovits.pretrained_dir", "resources/models/GPT-SoVITS"),

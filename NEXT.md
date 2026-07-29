@@ -11,6 +11,7 @@
 - [x] **性格设置**: 人设/性格可配置（`config.user.yaml` 覆盖 persona 段，system prompt 模板化 + emotion map 覆盖）✅ 2026-07-25
 - [ ] **记忆**: 跨会话长期记忆（sqlite + embedding 检索，见 `docs/voice-interaction-upgrade-plan.md` Phase E）
 - [ ] **配置必需工具**: 时间、日期等内置工具落地（`backend/tools/builtin/` 目录待建，工具注册/调用链路已就绪）
+- [ ] **GPT-SoVITS 延迟高**: 单句合成 RTF ~6-8（GPU），"你好世界，这是测试语音。" 2.5s 音频耗时 ~18s。根因是 SoVITS v2 decoder 端到端推理慢（非流式，逐 token AR 解码 + vocoder），短期无解；长期可探索流式 v3/v4 或换轻量 vocoder。候选低延迟方案仍推荐 CosyVoice2（RTF ~1.5 短句）或 edge-tts（RTF <0.1）。
 - [ ] **说话不能带表情等**: LLM 回复混入 emoji/颜文字/Markdown 符号会被 TTS 念出、干扰分句与口型 → system prompt 约束 + TTS 合成前文本清洗双保险（persona 的 `<SpeakingStyle>` 层已含 TTS 约束）
 
 ### 🔴 高优先级

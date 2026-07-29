@@ -48,6 +48,9 @@ backend/tools/user_tools/*
 !backend/tools/user_tools/.gitkeep
 resources/models/
 
+# GPT-SoVITS fine-tuned weights (per-user, large files)
+resources/GPT-SoVITS-*/
+
 # Test outputs
 resources/test_audio/tts_output_*
 resources/test_audio/*.mp3
