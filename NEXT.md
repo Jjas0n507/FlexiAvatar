@@ -9,7 +9,9 @@
 
 - [ ] **美化页面、优化交互**: UI 视觉打磨 + 交互体验（可与 Phase 6 的对话气泡/设置面板合并推进）
 - [x] **性格设置**: 人设/性格可配置（`config.user.yaml` 覆盖 persona 段，system prompt 模板化 + emotion map 覆盖）✅ 2026-07-25
-- [ ] **记忆**: 跨会话长期记忆（sqlite + embedding 检索，见 `docs/voice-interaction-upgrade-plan.md` Phase E）
+- [ ] **记忆**: 跨会话长期记忆（见实现计划 `plans/1-2-3-mcp-skills-peaceful-cosmos.md`）
+  - [ ] **记忆提取 prompt 优化**: qwen2.5:7b 提取结构化 JSON 质量不稳定（可能提废话/漏关键信息/格式错误）。提取 prompt 需给足正反例 + 解析失败静默丢弃。待实际跑几次后根据输出质量迭代 prompt
+  - [ ] **记忆注入 prompt 优化**: 全量要点列表塞 system prompt，7B 模型指令遵循有限。待实测后调呈现方式（如"以下是关于用户的已知信息，请自然地参考"）
 - [ ] **配置必需工具**: 时间、日期等内置工具落地（`backend/tools/builtin/` 目录待建，工具注册/调用链路已就绪）
 - [ ] **说话不能带表情等**: LLM 回复混入 emoji/颜文字/Markdown 符号会被 TTS 念出、干扰分句与口型 → system prompt 约束 + TTS 合成前文本清洗双保险（persona 的 `<SpeakingStyle>` 层已含 TTS 约束）
 

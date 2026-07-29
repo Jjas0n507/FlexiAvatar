@@ -24,6 +24,7 @@ from backend.session.manager import SessionManager, SessionState
 from backend.tools.registry import ToolRegistry
 from backend.live2d.motion_controller import MotionController
 from backend.audio_pipeline import AudioPipeline
+from backend.memory import MemoryManager
 
 # ── 日志 ─────────────────────────────────────────
 
@@ -43,6 +44,7 @@ config.load()
 # 初始化核心组件
 session_manager = SessionManager()
 tool_registry = ToolRegistry()
+memory_manager = MemoryManager(storage_dir=config.get("memory.data_dir", "data"))
 
 # Phase 0.6: 加载 ModelProfile
 try:
@@ -133,6 +135,7 @@ async def _get_or_create_pipeline(client_id: str, websocket: WebSocket) -> Audio
         pipeline = AudioPipeline(
             session_manager=session_manager,
             motion_controller=motion_controller,
+            memory_manager=memory_manager,
             on_tts_audio=lambda payload: _send_tts(client_id, payload),
             on_live2d_control=lambda msg: send_to(client_id, {
                 "type": "live2d.control",
@@ -447,6 +450,13 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     logger.info("正在关闭...")
+    # 遍历所有活跃 pipeline 触发记忆提取（覆盖关闭窗口路径）
+    for client_id, pipeline in list(client_pipelines.items()):
+        try:
+            await pipeline.shutdown()
+        except Exception as e:
+            logger.warning(f"关闭 pipeline {client_id} 失败: {e}")
+    client_pipelines.clear()
     await session_manager.reset()
     connected_clients.clear()
     logger.info("已关闭")
