@@ -524,6 +524,12 @@ const Live2DCanvas: React.FC = () => {
       const [minInterval, maxInterval] = profile?.idle?.expression_interval ?? [5.0, 12.0];
       const delay = (minInterval + Math.random() * (maxInterval - minInterval)) * 1000;
       autoBehaviorTimerRef.current = setTimeout(() => {
+        // 说话时跳过表情切换：原生表达式会在 beforeModelUpdate 之后覆写口型参数
+        const m = mouthRef.current;
+        if (m.samples && m.el && !m.el.paused) {
+          scheduleNext();
+          return;
+        }
         const expr = idleExprs[Math.floor(Math.random() * idleExprs.length)];
         console.log("[Live2D] idle expression:", expr);
         setExpression(expr);

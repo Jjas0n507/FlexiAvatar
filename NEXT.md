@@ -13,6 +13,7 @@
   - [ ] **记忆提取 prompt 优化**: qwen2.5:7b 提取结构化 JSON 质量不稳定（可能提废话/漏关键信息/格式错误）。提取 prompt 需给足正反例 + 解析失败静默丢弃。待实际跑几次后根据输出质量迭代 prompt
   - [ ] **记忆注入 prompt 优化**: 全量要点列表塞 system prompt，7B 模型指令遵循有限。待实测后调呈现方式（如"以下是关于用户的已知信息，请自然地参考"）
 - [ ] **配置必需工具**: 时间、日期等内置工具落地（`backend/tools/builtin/` 目录待建，工具注册/调用链路已就绪）
+- [ ] **GPT-SoVITS 延迟高**: 单句合成 RTF ~6-8（GPU），"你好世界，这是测试语音。" 2.5s 音频耗时 ~18s。根因是 SoVITS v2 decoder 端到端推理慢（非流式，逐 token AR 解码 + vocoder），短期无解；长期可探索流式 v3/v4 或换轻量 vocoder。候选低延迟方案仍推荐 CosyVoice2（RTF ~1.5 短句）或 edge-tts（RTF <0.1）。
 - [ ] **说话不能带表情等**: LLM 回复混入 emoji/颜文字/Markdown 符号会被 TTS 念出、干扰分句与口型 → system prompt 约束 + TTS 合成前文本清洗双保险（persona 的 `<SpeakingStyle>` 层已含 TTS 约束）
 
 ### 🔴 高优先级

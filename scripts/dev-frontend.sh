@@ -10,6 +10,8 @@ cd "$(dirname "$0")/../frontend"
 unset ELECTRON_RUN_AS_NODE
 unset GTK_PATH GIO_MODULE_DIR GIO_EXTRA_MODULES
 unset LD_LIBRARY_PATH LOCPATH GSETTINGS_SCHEMA_DIR
+# snap VSCode 终端泄漏 SNAP_* 变量 → Electron PulseAudio 发现失败
+unset $(env | grep '^SNAP' | cut -d= -f1 | xargs) 2>/dev/null || true
 
 export FLEXIAVATAR_DOCKER=1
 exec npm run electron:dev

@@ -46,6 +46,34 @@ RUN SP=$(python -c "import site; print(site.getsitepackages()[0])") \
 COPY scripts/patch-cosyvoice-load-wav.py /tmp/
 RUN python /tmp/patch-cosyvoice-load-wav.py && rm /tmp/patch-cosyvoice-load-wav.py
 
+# ── GPT-SoVITS 本地 TTS（零样本克隆 + 微调双模式，config tts.engine: gpt-sovits）──
+# - torch/torchaudio 用 ROCm 基础镜像自带 → 排除上游 CUDA 版
+# - tensorrt/deepspeed/onnxruntime-gpu 为 CUDA 专属 → 排除
+# - 基座预训练权重运行时由 ModelScope 自动下载到 resources/models/GPT-SoVITS
+ARG GPTSOVITS_REF=20250606v2pro
+RUN git init /opt/GPT-SoVITS \
+    && cd /opt/GPT-SoVITS \
+    && git remote add origin https://github.com/RVC-Boss/GPT-SoVITS.git \
+    && git fetch --depth 1 origin refs/tags/${GPTSOVITS_REF} \
+    && git checkout FETCH_HEAD \
+    && grep -vE "^--extra-index|^torch|^torchaudio|tensorrt|deepspeed|onnxruntime-gpu|^funasr" requirements.txt > /tmp/gptsovits-req.txt \
+    && pip install --no-cache-dir -r /tmp/gptsovits-req.txt \
+       onnxruntime==1.23.2 \
+    && rm /tmp/gptsovits-req.txt \
+    && rm -rf /opt/GPT-SoVITS/.git
+
+# sys.path 注入
+RUN SP=$(python -c "import site; print(site.getsitepackages()[0])") \
+    && printf '%s\n%s\n' "/opt/GPT-SoVITS" "/opt/GPT-SoVITS/GPT_SoVITS" > "$SP/gptsovits.pth"
+
+# torchaudio.load → soundfile 补丁（ROCm 镜像缺 TorchCodec）
+COPY scripts/patch-gptsovits-load-wav.py /tmp/
+RUN python /tmp/patch-gptsovits-load-wav.py && rm /tmp/patch-gptsovits-load-wav.py
+
+# GPT-SoVITS 运行时依赖预下载（BERT/Hubert/FastLangDetect/G2PW 由 adapter 首次加载时下载）
+RUN python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=True); nltk.download('cmudict', quiet=True)" \
+    && mkdir -p /opt/GPT-SoVITS/GPT_SoVITS/pretrained_models/fast_langdetect
+
 # 注意: ROCm GPU 验证在运行时进行（docker compose up 时挂载 /dev/kfd /dev/dri）
 # 构建时不验证（docker build 没有 GPU 设备）
 

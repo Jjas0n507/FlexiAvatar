@@ -432,7 +432,7 @@ async def startup():
     logger.info(f"WebSocket 端点: ws://{config.get('app.host', '127.0.0.1')}:{config.get('app.port', 8765)}/ws")
     logger.info("=" * 50)
 
-    # 重 TTS（CosyVoice2）后台预加载：加载+预热 ~1 分钟，不挡 /health，
+    # 重 TTS 引擎后台预加载：加载+预热可能需几十秒，不挡 /health，
     # 用户第一句话不再付冷启动成本。适配器是进程单例，pipeline 直接复用。
     async def _preload_tts():
         try:
