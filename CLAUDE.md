@@ -132,6 +132,7 @@ Abstract base class → adapter implementation, selected by config `engine` fiel
 | ASR | `backend/asr/base.py::BaseASR` | `FunASRAdapter` | SenseVoiceSmall (ModelScope). **ASR+SER 一模型**，输出 `<\|HAPPY\|>文本`。非自回归 ~70ms/10s。 |
 | TTS | `backend/tts/base.py::BaseTTS` | `EdgeTTSAdapter` | MP3 原始字节直传（24kHz 48kbps CBR），`duration_ms=len/6` 估算。口型由前端 RMS 驱动，不需要时间戳。 |
 | TTS | `backend/tts/base.py::BaseTTS` | `CosyVoice2Adapter` | 零样本音色克隆（3-10s ref wav + 逐字文本，换音色=换 config）。WAV 直传，时长精确。ROCm: fp16 开、load_jit/trt 关。**进程单例**（`adapters.py::_cached`）+ 启动预热；短句 RTF ~1.5（段间有静默），长句 ≤1.0。 |
+| TTS | `backend/tts/base.py::BaseTTS` | `GptSovitsAdapter` | 零样本克隆 + 微调权重双模式。基座预训练权重自动下载（ModelScope），微调换 gpt_weights/sovits_weights。**进程单例** + 启动预热。社区有大量动漫角色微调权重（常见 RVC 模型的 .pth 不通用，需 GPT-SoVITS 格式）。 |
 | LLM | `backend/llm/base.py::BaseLLM` | `OpenAIStreamingAdapter` | SSE streaming. `stream_chat()`, `chat()`, `chat_with_tools()`. |
 
 ### WebSocket Messages
