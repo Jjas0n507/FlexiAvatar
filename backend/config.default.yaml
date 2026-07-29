@@ -94,6 +94,10 @@ llm:
     max_tokens: 1024
     api_key: "${ANTHROPIC_API_KEY}"
 
+# ── 记忆系统 ─────────────────────────────────
+memory:
+  data_dir: "data"
+
 # ── Live2D ───────────────────────────────────
 live2d:
   model_dir: "frontend/public/live2d/有马加奈"
@@ -130,3 +134,6 @@ conversation:
   max_history_messages: 20
   max_context_tokens: 4000
   silence_timeout_s: 30
+  compress_threshold: 20
+  compress_keep_recent: 8
+  compress_batch_size: 10

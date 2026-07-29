@@ -50,12 +50,16 @@ class AudioPipeline:
         on_live2d_control: Callable[[dict], Awaitable[None]] | None = None,
         on_asr_result: Callable[[str, bool], Awaitable[None]] | None = None,
         on_llm_stream: Callable[[str, bool, bool], Awaitable[None]] | None = None,
+        memory_manager=None,
+        session_id: str | None = None,
     ):
         self._session = session_manager
         self._on_tts_audio = on_tts_audio
         self._on_live2d = on_live2d_control
         self._on_asr_result = on_asr_result
         self._on_llm = on_llm_stream
+        self._memory_manager = memory_manager
+        self._session_id = session_id
 
         # 引擎 (懒初始化，具体类型由 config 的 engine 字段决定)
         self._vad = None       # type: BaseVAD | None
@@ -68,6 +72,8 @@ class AudioPipeline:
         self._history: list[Message] = []
         # 前端播放完成信号
         self._playback_done: asyncio.Event = asyncio.Event()
+        # 压缩锁（防 _compress_async 与 respond 并发写 _history）
+        self._history_lock: asyncio.Lock = asyncio.Lock()
 
         # 音频缓冲
         self._audio_buffer: list[np.ndarray] = []
@@ -94,6 +100,20 @@ class AudioPipeline:
             system_prompt = build_system_prompt(config.get("persona"))
             if system_prompt:
                 self._history = [Message(role="system", content=system_prompt)]
+
+            # 注入长期记忆
+            if self._session_id is None:
+                self._session_id = uuid.uuid4().hex[:8]
+            if self._memory_manager:
+                ctx = self._memory_manager.get_context()
+                if ctx:
+                    enriched = (
+                        f"{system_prompt}\n\n"
+                        f"<user_memory>\n以下是关于用户的已知信息，请在回复中自然地参考它们：\n"
+                        f"{ctx}\n</user_memory>"
+                    )
+                    self._history = [Message(role="system", content=enriched)]
+                    logger.info(f"长期记忆已注入 ({len(ctx.splitlines())} 条)")
 
             await self._asr.warmup()
             logger.info("All engines initialized")
@@ -242,13 +262,14 @@ class AudioPipeline:
         utterance_id = uuid.uuid4().hex[:8]
         self._playback_done.clear()  # 清掉上一轮（可能被打断）的残留信号
 
-        # 对话历史
-        self._history.append(Message(role="user", content=user_text))
-        max_history = config.get("conversation.max_history_messages", 20)
-        if len(self._history) > max_history + 1:  # +1 for system prompt
+        # 对话历史 — 追加用户消息 + fallback 截断
+        async with self._history_lock:
+            self._history.append(Message(role="user", content=user_text))
+            max_history = config.get("conversation.max_history_messages", 20)
             system_msgs = [m for m in self._history if m.role == "system"]
             non_system = [m for m in self._history if m.role != "system"]
-            self._history = system_msgs + non_system[-max_history:]
+            if len(non_system) > max_history:
+                self._history = system_msgs + non_system[-max_history:]
 
         segmenter = Segmenter(
             min_segment_length=config.get("tts.streaming.min_segment_length", 15),
@@ -354,7 +375,8 @@ class AudioPipeline:
                 response_text = "".join(response_parts).strip()
                 logger.info(f"LLM result ({tts_order} sentences): {response_text[:80]}...")
                 if response_text:
-                    self._history.append(Message(role="assistant", content=response_text))
+                    async with self._history_lock:
+                        self._history.append(Message(role="assistant", content=response_text))
             finally:
                 # 正常/取消/异常统一收尾：等 worker → sentinel → 等消费者
                 if tts_tasks:
@@ -385,6 +407,15 @@ class AudioPipeline:
             with contextlib.suppress(Exception):
                 await self._session.transition("speaking_done", reason="tts_finished")
 
+        # 回复完成后，异步压缩旧消息（下一轮生效，零延迟影响）
+        if not cancel.is_set() and self._llm is not None:
+            compress_threshold = config.get("conversation.compress_threshold", 20)
+            async with self._history_lock:
+                non_system = [m for m in self._history if m.role not in ("system",)]
+                need_compress = len(non_system) > compress_threshold
+            if need_compress:
+                asyncio.create_task(self._compress_async())
+
     def _flush_queue(self):
         """清空输入队列中的残留音频帧"""
         drained = 0
@@ -397,11 +428,85 @@ class AudioPipeline:
         if drained:
             logger.debug(f"Flushed {drained} residual audio frames")
 
+    # ── 会话记忆压缩 ─────────────────────────────
+
+    async def _compress_async(self):
+        """后台异步压缩旧消息，下一轮 respond() 生效"""
+        try:
+            batch_size = config.get("conversation.compress_batch_size", 10)
+            keep_recent = config.get("conversation.compress_keep_recent", 8)
+
+            async with self._history_lock:
+                # 排除 system 角色（含已有摘要），只压缩普通对话消息
+                system_msgs = [m for m in self._history if m.role == "system"]
+                chat_msgs = [m for m in self._history if m.role != "system"]
+
+                if len(chat_msgs) <= keep_recent:
+                    return  # 没有足够旧消息可压缩
+
+                # 取最旧的 batch_size 条
+                batch = chat_msgs[:batch_size]
+                # 保留最近 keep_recent 条不动
+                recent = chat_msgs[-keep_recent:]
+
+            summary = await self._summarize_batch(batch)
+            if summary is None:
+                return  # LLM 失败，静默跳过
+
+            async with self._history_lock:
+                # 重新读取（压缩期间可能有新的 respond 写入了消息）
+                current_system = [m for m in self._history if m.role == "system"]
+                current_chat = [m for m in self._history if m.role != "system"]
+                if len(current_chat) <= keep_recent:
+                    return
+                kept_recent = current_chat[-keep_recent:]
+                summary_msg = Message(role="system", content=f"[对话摘要] {summary}")
+                self._history = current_system + [summary_msg] + kept_recent
+
+            logger.info(f"压缩了 {len(batch)} 条旧消息 → 1 条摘要 (保留 {keep_recent} 条最近消息)")
+        except Exception as e:
+            logger.warning(f"压缩失败（静默丢弃）: {e}")
+
+    async def _summarize_batch(self, batch: list[Message]) -> str | None:
+        """调 LLM 将一批消息总结为一句话"""
+        if self._llm is None:
+            return None
+        role_labels = {"user": "用户", "assistant": "助手", "tool": "工具"}
+        lines = []
+        for m in batch:
+            label = role_labels.get(m.role, m.role)
+            content = (m.content or "")[:300]
+            lines.append(f"{label}: {content}")
+        conversation_snippet = "\n".join(lines)
+
+        prompt = (
+            "将以下对话片段总结为一句话，保留关键信息（人名、重要事实、偏好、决定）。"
+            "只返回总结文本，不要包含任何前缀或解释。\n\n" + conversation_snippet
+        )
+        try:
+            result = await self._llm.chat(
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return result.strip()
+        except Exception as e:
+            logger.warning(f"摘要 LLM 调用失败: {e}")
+            return None
+
     # ── 清理 ──────────────────────────────────
 
     async def shutdown(self):
-        """关闭流水线"""
+        """关闭流水线 — 提取长期记忆后清理"""
         self._stop.set()
+
+        # 提取长期记忆（至少有一次实质性对话）
+        if self._memory_manager and len(self._history) > 3:
+            try:
+                await self._memory_manager.extract_and_save(
+                    self._history, self._llm, self._session_id or "unknown",
+                )
+            except Exception as e:
+                logger.warning(f"shutdown 记忆提取失败: {e}")
+
         self._audio_buffer.clear()
         self._history.clear()
         while not self._input_queue.empty():

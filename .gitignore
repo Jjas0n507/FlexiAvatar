@@ -54,3 +54,6 @@ resources/test_audio/*.mp3
 
 # CodeGraph 本地索引
 .codegraph/
+
+# 记忆系统（用户数据）
+data/
