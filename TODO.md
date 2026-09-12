@@ -2,7 +2,7 @@
 
 > 对照 `DESIGN_AND_PLAN.md` 阶段 1-3，记录未完成项、可选跳过项、优化机会。
 > 标记说明: ❌ 未做 | ⚠️ 部分/可优化 | 📦 属于后续阶段 | ✅ 已完成
-> 最后核对：2026-07-25（含数字人接入后的复核）
+> 最后核对：2026-07-25（含数字人接入 + 素材来源复测）
 
 ---
 
@@ -103,6 +103,39 @@
 - **耦合点① / 预留字段** — persona 情绪映射在当前形象缺失时告警 + 回退；
   `persona_id` / `voice_id` 已预留（只透传不消费）。
 
+### ❌ 待解决（数字人素材链路）
+
+#### 1. 素材来源已断：Ready Player Me 下线（**阻塞"换真实形象"这件事**）
+
+- **现象**：`models.readyplayer.me/{avatarId}.glb?morphTargets=ARKit,...` 完全不工作 ——
+  域名在**权威 DNS 层已无记录**：主域 `readyplayer.me` 仅 SOA 无 A 记录、
+  `models.`/`api.` 为 NXDOMAIN、`docs.readyplayer.me` 同样不解析。
+- **已排除**：本机网络与代理无关 —— 同期经同一代理访问 github / raw.githubusercontent /
+  vroid.com / hub.vroid.com / Sketchfab / Mixamo / Khronos 全部 200；
+  用 Cloudflare+Google DoH 绕开本机 DNS 直查权威，结论一致。
+- **影响**：原计划（`docs/digital-human-avatar-proposal.md` 方案 A1）的主推素材路线作废；
+  **RPM 的 blendshape 命名（`jawOpen`/`eyeBlinkLeft`）仍是我们的 schema 目标之一，
+  但已无处下载**。若手头有历史下载的 `.glb` 存档，现 profile 机制可直接用（需补一份 profile）。
+- **待办**：
+  - [ ] 素材路线改以 **VRoid** 为主（官网可达；Studio 自建导出 VRM）
+  - [ ] 评估备选：VRoid Hub（注意各模型授权）、自建 GLB、
+        Sketchfab 商用授权模型、MetaPerson/rooom 等 RPM 替代品
+  - [ ] 把「素材获取」写进 README 时明确"RPM 不可用"，避免新人照旧文档白跑
+  - [ ] 清理 `docs/digital-human-avatar-proposal.md` 里以 RPM 为首选的表述
+        （该文档是调研输入材料，已加"以 plan 为准"标注，但 RPM 段落易误导）
+
+#### 2. VRM 素材能力缺口：T-pose + 无 lookAt + 未用 viseme
+
+已接入的 VRoid 示例 VRM 能跑（57 morph、口型随 RMS、眨眼生效），但有三处不足：
+
+- [ ] **静止 T-pose** —— 本渲染器不驱动骨骼动画。接 `three-vrm` 或换带
+      `AnimationClip` 的 GLB（现有 `AnimationMixer` 通道已就绪但未接素材）
+- [ ] **无眼球注视 morph** —— VRM 把 lookAt 放在扩展（`VRMC_vrm.lookAt`）而非 morph，
+      当前眼神跟随**整条通道跳过**（`[DigitalHuman] 模型没有眼球 morph` 日志可见）
+- [ ] **viseme 级口型未启用** —— 该模型自带 A/I/U/E/O 五个口型 morph，
+      现只用单一 `Fcl_MTH_A` 打底；升级需"音素/文本 → viseme 序列"（见计划 §2.3 精度档）
+- [ ] 一次性接入 `three-vrm` 可同时解决前两项，并顺带拿到 SpringBone 头发摆动
+
 ### ⚠️ 可优化
 
 - **两套 vite config 的 `/api` 代理** — `vite.config.ts`（Electron）与
@@ -123,6 +156,4 @@
 | WebSocket 心跳 | 低 | 当前前端主动 ping。可改后端主动 ping 检测断线。 |
 | `.env.example` | 中 | 为新开发者提供模板，列出所有环境变量（含 MKL-OpenMP 冲突说明）。 |
 | 口型增益按模型标定 | 中 | `lip_sync.gain` 因模型而异（facecap 标定 6.0）；换素材需重新标定，可考虑做一次性标定脚本/界面。 |
-| VRM 待机动画 / lookAt | 中 | VRoid 示例 VRM 已接入，但静止 T-pose 且无注视 morph（VRM 用扩展定义 lookAt）。接 `three-vrm` 可一次解决二者，并顺带拿到 A/I/U/E/O viseme 级口型。 |
-| 素材来源切换 | — | Ready Player Me 已下线（DNS 无记录），文档与脚本均已改指 VRoid；后续素材调研不要再以 RPM 为默认路线。 |
 | Electron 可执行位 | 低 | NTFS/exFAT 挂载上 `node_modules/electron/dist/electron` 无可执行位（`chmod` 无效）。已用 `ELECTRON_OVERRIDE_DIST_PATH` + ext4 副本绕过；可封装成脚本（见 NEXT.md）。 |

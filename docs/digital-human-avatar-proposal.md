@@ -179,7 +179,9 @@ registerExpressionSetter((name) => { /* 情绪 → blendshape 权重 */ });
 ### 4.1 方案 A（3D 数字人）所需素材
 
 1. **3D 模型文件 `.glb`/`.gltf`（必需）**
-   - 推荐 ReadyPlayerMe：一张正面照 → 生成并**导出 .glb 离线自托管**（约 1–5MB）。
+   - ~~推荐 ReadyPlayerMe：一张正面照 → 生成并**导出 .glb 离线自托管**（约 1–5MB）。~~
+     🔴 **RPM 已下线（2026-09 实测，DNS 层无记录），此行作废** → 改用 VRoid 导出 `.vrm`，
+     或自建/购买带 blendshape 的 GLB（见 `digital-human-avatar-plan.md` §0.5）。
    - 或 VRoid 导出的 `.vrm`（二次元）。
    - 或定制建模导出（注意**blendshape 命名要规范**，至少要有口型、眨眼、眉、嘴角）。
 2. **Blendshape 清单（必需，用于写 profile）**

@@ -95,6 +95,13 @@ npm install @pixiv/three-vrm
 
 ### 3.1 路线 A1：ReadyPlayerMe（GLB）
 
+> 🔴 **此路线已失效（2026-09 实测）**：`readyplayer.me` 在**权威 DNS 层已无记录**
+> （主域仅 SOA 无 A 记录、`models.readyplayer.me` 为 NXDOMAIN、`docs.` 亦不解析），
+> 官方捏人/导出通道全部不可用；用 DoH 绕开本机 DNS 复核结论一致，**与代理无关**。
+> 下文步骤仅作历史记录保留。**替代路线见 `digital-human-avatar-plan.md` §0.5（以 VRoid 为主）**。
+> 若你手头有历史下载的 RPM `.glb` 存档，仍可直接使用 —— profile schema 完全兼容
+> （`jawOpen` / `eyeBlinkLeft` / `viseme_*` 那套命名），只需补一份 `avatar_profile.yaml`。
+
 **能拿到什么**：一个带 **ARKit 52 个 blendshape + Oculus Visemes** 的 `.glb`，含 `jawOpen`、`mouthOpen`、`mouthSmileLeft/Right`、`eyeBlinkLeft/Right`、`brow*`、`viseme_*` 等，可离线自托管。
 
 **步骤**：
