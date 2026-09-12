@@ -2,18 +2,22 @@
  * TTS 音频播放 Hook（RMS 口型驱动）。
  *
  * FIFO 队列 + 泵循环：每段先应用表情，再 await speak(bytes) —
- * Live2DCanvas 的 speak 桥负责解码(OfflineAudioContext)、播放(<audio>)、
+ * 渲染器的 speak 桥负责解码(OfflineAudioContext)、播放(<audio>)、
  * 每帧 RMS 驱动口型；口型与播放头同源(el.currentTime)，结构上不失步。
  *
  * 队列排空 → 300ms 防抖发送 playback.done。
  * 打断（sessionState=interrupted）→ stopAll()：停音频+清队列+按 utteranceId 丢迟到段。
+ *
+ * 单例约束：播放泵是模块级单例（同一时刻只应有一条播放链）。
+ * 桥的注册带 owner token —— 运行期切换渲染器时，旧画布的 cleanup
+ * 不得把新画布刚注册的桥置空（历史上这会让音频整体静默）。
  */
 
 import { useEffect } from "react";
 import { useAgentStore } from "../stores/agent-store";
 import { wsClient } from "../services/ws-client";
 
-// ── 桥接口（Live2DCanvas 在模型加载后注册）────────
+// ── 桥接口（渲染器在模型加载后注册）────────
 export interface SpeakerBridge {
   /** 播放一段音频并驱动口型；resolve = 播放结束 */
   speak: (buf: ArrayBuffer, mime: string) => Promise<void>;
@@ -30,20 +34,43 @@ interface Segment {
 
 // ── 模块级单例 ────────────────────────────────────
 let _bridge: SpeakerBridge | null = null;
+let _bridgeOwner: symbol | null = null;
 let _exprSetter: ((name: string) => void) | null = null;
+let _exprOwner: symbol | null = null;
 const _queue: Segment[] = [];
 let _pumping = false;
 let _staleUtteranceId: string | null = null;
 let _lastUtteranceId: string | null = null;
 let _doneTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function registerSpeaker(bridge: SpeakerBridge | null): void {
+/**
+ * 注册 speak 桥。`owner` 是渲染器实例的身份 token（通常 useRef(Symbol())）。
+ *
+ * 传 bridge 时：无条件接管（新实例永远优先）。
+ * 传 null 时：**只有当前 owner 才能注销** —— 否则旧实例的 cleanup 会踢掉
+ * 新实例刚注册的桥，导致 audio 播放链整体静默（切形象时必踩）。
+ */
+export function registerSpeaker(bridge: SpeakerBridge | null, owner: symbol): void {
+  if (bridge === null) {
+    if (_bridgeOwner !== owner) return; // 已被新实例接管，旧实例无权注销
+    _bridge = null;
+    _bridgeOwner = null;
+    return;
+  }
   _bridge = bridge;
-  if (bridge && _queue.length > 0) void pump(); // 模型晚于音频就绪时补泵
+  _bridgeOwner = owner;
+  if (_queue.length > 0) void pump(); // 模型晚于音频就绪时补泵
 }
 
-export function registerExpressionSetter(fn: ((name: string) => void) | null): void {
+export function registerExpressionSetter(fn: ((name: string) => void) | null, owner: symbol): void {
+  if (fn === null) {
+    if (_exprOwner !== owner) return;
+    _exprSetter = null;
+    _exprOwner = null;
+    return;
+  }
   _exprSetter = fn;
+  _exprOwner = owner;
 }
 
 function schedulePlaybackDone(): void {
