@@ -407,3 +407,13 @@ html, body, #root {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
+
+/* ── 形象分发容器（Live2D / 数字人共用定位语义）── */
+.avatar-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}

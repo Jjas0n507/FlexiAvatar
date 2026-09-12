@@ -11,7 +11,7 @@ import React, { useEffect, useRef } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useAudioPlayback } from "./hooks/useAudioPlayback";
 import { useMicCapture } from "./hooks/useMicCapture";
-import Live2DCanvas from "./components/Live2DCanvas";
+import AvatarCanvas from "./components/AvatarCanvas";
 import StartScreen from "./components/StartScreen";
 import TopBar from "./components/TopBar";
 import ChatPanel from "./components/ChatPanel";
@@ -112,7 +112,7 @@ const MainApp: React.FC<{ onRetry: () => void }> = ({ onRetry }) => {
 
   return (
     <div className="app-container">
-      <Live2DCanvas />
+      <AvatarCanvas />
       <TopBar />
       <ChatPanel onSend={sendText} />
 

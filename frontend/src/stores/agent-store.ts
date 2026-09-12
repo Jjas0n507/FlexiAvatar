@@ -17,6 +17,9 @@ import type {
   Live2DControlPayload,
   ModelProfile,
   TTSSpeechPayload,
+  AvatarProfile,
+  AvatarType,
+  AvatarEntry,
 } from "../types";
 
 export type AppPhase = "startup" | "loading" | "ready";
@@ -65,9 +68,16 @@ export interface AgentState {
   live2dControl: Live2DControlPayload | null;
   setLive2DControl: (control: Live2DControlPayload | null) => void;
 
-  // ModelProfile (从后端 live2d.profile 消息接收)
+  // ModelProfile (从后端 live2d.profile 消息接收；Live2D 渲染器消费)
   modelProfile: ModelProfile | null;
   setModelProfile: (profile: ModelProfile) => void;
+
+  // 形象（从后端 avatar.profile 消息接收；AvatarCanvas 据此分发渲染器）
+  avatarProfile: AvatarProfile | null;
+  setAvatarProfile: (profile: AvatarProfile, entry?: AvatarEntry | null) => void;
+  avatarType: AvatarType;
+  selectedAvatar: AvatarEntry | null;
+  setSelectedAvatar: (entry: AvatarEntry | null) => void;
 
   // TTS speech (合并后的 audio + timeline)
   ttsSpeech: TTSSpeechPayload | null;
@@ -163,6 +173,20 @@ export const useAgentStore = create<AgentState>()(
   // ModelProfile
   modelProfile: null,
   setModelProfile: (profile) => set({ modelProfile: profile }),
+
+  // 形象
+  avatarProfile: null,
+  selectedAvatar: null,
+  avatarType: "live2d",
+  setAvatarProfile: (profile, entry) =>
+    set((s) => ({
+      avatarProfile: profile,
+      avatarType: profile.type,
+      // Live2D 渲染器仍从 modelProfile 取参数（结构不变，零改动）
+      modelProfile: profile.type === "live2d" ? (profile as ModelProfile) : s.modelProfile,
+      selectedAvatar: entry ?? s.selectedAvatar,
+    })),
+  setSelectedAvatar: (entry) => set({ selectedAvatar: entry }),
 
   // TTS speech
   ttsSpeech: null,
