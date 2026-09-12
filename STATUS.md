@@ -5,19 +5,64 @@
 
 ## 当前位置
 
-- **分支**: `master`
-- **阶段**: Persona 配置化性格系统已完成；CosyVoice2 本地音色克隆 + playback.done 上行链路定案
-- **进度**: 性格设置 0→1（`config.user.yaml` 覆盖 persona 段，换人设不改代码）；待用户听感验收 → 后续记忆系统
+- **分支**: `phase-digital-human`
+- **阶段**: 数字人形象接入已完成（运行期形象选择 + Three.js 渲染器 + 双向切换）
+- **进度**: 计划 Stage 0-7 全部落地（7 个提交）；公开占位素材跑通全链路，
+  **真实数字人素材到位后只改 `avatar_profile.yaml`，不改代码**
+- **待办**: 用户视觉/听感验收；换真实素材（RPM/VRoid/自建）
 
 ## 最近提交
 
 ```
-a8e0b50 feat(persona): 可替换性格设置 — system prompt 模板化 + emotion map 覆盖
-5a492d7 Merge pull request #5 from Jjas0n507/phase-cosyvoice-tuning
-d04cf27 fix: playback.done 双重上行断路 — 后端接收循环自死锁 + 前端孤儿 socket
+ba04d2c feat(frontend): 数字人空闲行为 + 双向切换回归（owner token 验收）
+6ac70b2 feat(frontend): DigitalHumanCanvas 最小闭环（Three.js + morph 驱动）
+8d62b4e feat(frontend): 开始界面形象选择页 + picking 阶段
+70606ae feat(backend): 形象清单发现 + avatar.select 握手 + 耦合点①校验
+71c8dd6 feat(frontend): AvatarCanvas 分发壳 + 形象 profile 类型契约
+4e12bae refactor(frontend): 抽出公共口型模块 + 桥 owner token
+6a85652 chore: 数字人前置 — three 依赖 + 验证素材脚本 + 目录准备
 ```
 
 ## 本轮核心变化
+
+### 数字人形象接入（2026-07-25，`phase-digital-human`）
+
+计划与验收清单：`docs/digital-human-avatar-plan.md`（含实测数据回填）
+
+**交互（startup → picking → loading → ready）**
+- 开始界面新增「选择形象」页：模式页签（数字人 / Live2D）+ 卡片网格，
+  点卡片即提交（后端校验 + 加载），成功才进主界面
+- 预留 `persona_id` / `voice_id` 关联字段（本版只解析/透传/显示，不消费）——
+  将来"选角色（形象+人设+音色）"是填语义而非改结构
+
+**后端**
+- `backend/avatar/`：`avatar_profile.py`（契约，两类 schema 通吃）、
+  `catalog.py`（目录发现 + URL 换算 + 白名单）、`select.py`（选择逻辑，无 FastAPI 依赖，可单测）
+- `GET /api/avatars` 清单；WS `avatar.select` 握手；`avatar.profile`（带 `type` 判别）
+  与旧 `live2d.profile` 双发兼容
+- **耦合点①落地**：persona 映射出的情绪若当前形象缺失 → 列清单 + 回退 neutral
+  （实测：有马加奈缺 `angry`，切换时警告可见）
+
+**前端**
+- `useLipSyncAudio`：从 Live2DCanvas 抽出的公共口型模块（进程级单例，
+  兼容 StrictMode 双挂载；拉取式 `getRMS()`）
+- **桥 owner token**：解决"切换渲染器时旧画布 cleanup 踢掉新画布音频桥"的隐患
+- `DigitalHumanCanvas`：Three.js + morph 驱动（口型/表情/眨眼分通道 + 逐帧合成 + lerp）；
+  KTX2/meshopt 解码器支持；缺 morph 时整通道降级不崩
+- 渲染器懒加载：主包 829KB → 213KB，两个渲染器各成独立 chunk
+
+**验证方式（可复现）**
+- 后端 61 个新测试（catalog 32 + profile 29），合并既有 92 passed
+- CDP 驱动真实 Chrome + 真实后端 + 真实 GLB：口型轨迹、
+  表情 lerp、整脸 morph 路径、缺 morph 降级、7 轮双向切换回归
+- dev 排查口：`window.__digitalHuman`（morph 索引/权重）、`__lipSyncState`（桥归属）、
+  `__lipSyncProbe`（强制 RMS，headless 无手势时验证口型通道）、`__agentStore`
+
+**已知噪声（非本轮引入）**
+- Live2D 挂载时 1 次 `[Live2D] WebGL context LOST`：源自 PIXI 在 StrictMode
+  双挂载下销毁旧上下文，该监听器原有代码即存在；canvas 数不增长、功能无影响
+
+## 上一轮核心变化
 
 ### Persona 配置化性格系统（2026-07-25）
 

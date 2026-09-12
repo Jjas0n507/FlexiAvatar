@@ -5,6 +5,22 @@
 
 ## 当前优先级
 
+### 🆕 数字人形象接入（2026-07-25）— 已完成，待验收
+
+- [x] 运行期形象选择（开始界面选模式 + 具体模型）+ Three.js 数字人渲染器
+      全链路跑通（7 个提交，计划见 `docs/digital-human-avatar-plan.md`）
+- [ ] **用户验收**：外观/口型/表情观感；选择页交互是否符合预期
+- [ ] **换真实素材**：RPM / VRoid / 自建 GLB → 放入 `frontend/public/avatar/<名字>/`
+      并写 `avatar_profile.yaml`（**不改代码**）；占位素材用
+      `bash scripts/fetch-placeholder-avatars.sh` 获取
+- [ ] **口型增益标定**：不同模型的 `jawOpen` 敏感度差异大，按真实素材调
+      `lip_sync.gain`（占位 facecap 标定为 6.0）
+- [ ] 长时间挂机（≥30min）内存/显存观察
+- [ ] 选择页预览（已在 `AvatarPicker` 预留 `.avatar-preview-slot` + 渲染器
+      `mode: main|preview` 设计，本版未做）
+- [ ] `persona_id` / `voice_id` 的实际消费（"选角色" = 形象 + 人设 + 音色）
+- [ ] Live2D 表情 lerp 平滑（数字人已做，Live2D 仍是直接设值）
+
 ### 🆕 新需求（2026-07-19 用户提出）
 
 - [ ] **美化页面、优化交互**: UI 视觉打磨 + 交互体验（可与 Phase 6 的对话气泡/设置面板合并推进）

@@ -12,10 +12,20 @@
  * `.avatar-root[data-avatar-type]` 便于调试与后续选择页共用容器语义。
  */
 
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import { useAgentStore } from "../stores/agent-store";
-import Live2DCanvas from "./Live2DCanvas";
-import DigitalHumanCanvas from "./DigitalHumanCanvas";
+
+// 两个渲染器都懒加载：Three.js 与 PIXI 各自 ~700KB，全部打进主包会让
+// 启动/选择页白白付出两份成本。按需加载后，用户选中哪个才下哪一份。
+const Live2DCanvas = lazy(() => import("./Live2DCanvas"));
+const DigitalHumanCanvas = lazy(() => import("./DigitalHumanCanvas"));
+
+/** 懒加载期间的占位（沿用既有 overlay 样式，不新增视觉） */
+const RendererLoading: React.FC = () => (
+  <div className="live2d-status-overlay">
+    <p className="live2d-status-text">渲染器加载中...</p>
+  </div>
+);
 
 const AvatarCanvas: React.FC = () => {
   const avatarProfile = useAgentStore((s) => s.avatarProfile);
@@ -33,11 +43,13 @@ const AvatarCanvas: React.FC = () => {
 
   return (
     <div className="avatar-root" data-avatar-type={resolvedType}>
-      {useDigitalHuman && avatarProfile?.type === "digital_human" ? (
-        <DigitalHumanCanvas key={renderKey} profile={avatarProfile} />
-      ) : (
-        <Live2DCanvas key={renderKey} />
-      )}
+      <Suspense fallback={<RendererLoading />}>
+        {useDigitalHuman && avatarProfile?.type === "digital_human" ? (
+          <DigitalHumanCanvas key={renderKey} profile={avatarProfile} />
+        ) : (
+          <Live2DCanvas key={renderKey} />
+        )}
+      </Suspense>
     </div>
   );
 };

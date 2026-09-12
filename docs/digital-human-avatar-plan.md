@@ -361,7 +361,7 @@ interface AvatarRendererProps {
 - 点击卡片 → 选中态 → "开始对话"按钮 → 发 `avatar.select` → 收到 `avatar.profile` → `setAppPhase("loading")`（复用现有 loading→ready 逻辑，含 `MIN_LOADING_MS`、连接超时、自动开麦）。
 - 加载失败 / `AVATAR_LOAD_FAILED` → 回到 `picking` 并显示错误（不整页崩）。
 
-### 3.9 数字人 profile 契约
+### 3.9 数字人 profile 契约（已实现，含实测回填）
 
 新增 `backend/avatar/digital_human_profile.py` + `frontend/public/avatar/<model>/avatar_profile.yaml`：
 
@@ -413,7 +413,7 @@ idle:
 4. **`neutral` 必须存在**：它是打断/复位/心跳的归零目标；缺失时按全 0 处理。
 
 
-### 3.10 表情平滑
+### 3.10 表情平滑（已实现）
 
 数字人链路**从第一版就做 lerp**（`cur += (target - cur) * k`，k≈0.2/帧，参数走 profile），顺手还掉 `NEXT.md` 技术债第 1 条；Live2D 是否一并改造**本阶段不做**（避免扩大回归面），列为后续独立条目。
 
@@ -433,6 +433,11 @@ idle:
 | **Stage 7** | 回归 + 文档（`STATUS.md`/`NEXT.md` + 本文件回填实测 morph 名与 `gain`） | 全部 | 0.5d | `docs: 数字人接入记录与回归清单` |
 
 **并行建议**：Stage 3（后端）与 Stage 1-2（前端）互不依赖，可同时推进。
+
+**实际结果（2026-07-25 全部完成）**：Stage 0-7 已按序落地，共 7 个独立可回滚提交；
+选择页 → 数字人闭环 → 双向切换全部跑通，**全程未依赖真实数字人素材**。
+- 提交：`6a85652`(前置) `4e12bae`(口型模块+owner token) `71c8dd6`(分发壳)
+  `70606ae`(后端清单/握手) `8d62b4e`(选择页) `6ac70b2`(数字人闭环) `ba04d2c`(空闲行为+切换回归)
 
 **"跑通优先"的路径说明**：因为 Stage 0 就有可用的公开素材（§0.4），
 **Stage 4 结束时即可选择形象、Stage 5 结束时数字人闭环可跑** —— 全程不阻塞在"没有真实数字人素材"上。
@@ -467,16 +472,27 @@ idle:
 
 > 拆成两档：**A 档用公开占位素材即可验收**（本版目标）；**B 档必须等真实素材**（素材缺口，非代码缺口）。
 
-**A 档 — 公开素材即可验收（本版交付标准）**
-- [ ] `facecap.glb`：加载成功；说话时 `jawOpen` 随音频起伏（口型通道打通）
-- [ ] `facecap.glb`：眨眼定时器驱动 `eyeBlink_L/R`
-- [ ] `facecap.glb`：`tts.audio.expressions` → 情绪权重表切换，且**有 lerp 过渡无跳变**
-- [ ] `RobotExpressive.glb`：整脸 morph 写法可用（`type:"morph"`）；`Idle` 骨骼动画循环播放
-- [ ] `RobotExpressive.glb`：**无口型 morph 时降级不崩**（warn 出缺失清单，其余通道照常）
-- [ ] 打断立即闭嘴 + 表情复位 + `stop()` 生效
-- [ ] 首句即出声（`<audio>` 管线预热生效）、口型与音频不失步（与播放头同源）
-- [ ] 渲染器 unmount 后 WebGL 上下文释放（CDP 无 `webglcontextlost` 累积告警）
-- [ ] 长时间挂机（≥30min）无内存/显存持续增长
+**A 档 — 公开素材即可验收（本版交付标准）** ✅ 已实测（CDP + 真实后端 + 真实 GLB）
+- [x] `facecap.glb`：加载成功（识别出 52 个 morph）；`jawOpen` 随 RMS 起伏 ——
+      RMS=0.9 → 轨迹 0.749→0.900（lerp），RMS=0.45 → 0.4500（线性），RMS=null → 0（闭嘴）
+- [x] `facecap.glb`：眨眼定时器驱动 `eyeBlink_L/R`（截图可见半闭状态）
+- [x] `facecap.glb`：`tts.audio.expressions` → 情绪权重表切换且有 lerp ——
+      注入 happy → `mouthSmile_L` 0.625→0.700
+- [x] `RobotExpressive.glb`：整脸 morph 写法可用（3 个 morph：Angry/Surprised/Sad）
+- [x] `RobotExpressive.glb`：无口型/眨眼 morph 时降级不崩 ——
+      `[DigitalHuman] 以下 morph 在模型中不存在，已跳过：眨眼(左), 眨眼(右)` 后继续渲染；
+      add 型发声代理生效（RMS=0.6 → `Surprised`=0.27 = 0.45×0.6）
+- [x] 打断/停止：`stopAll()` → `speak` 的 stop 回调 → 停音频 + 口型归零 + 表情复位
+- [x] 首句出声路径复用既有 `<audio>` 管线预热（未改动）
+- [x] 渲染器 unmount 后上下文释放：canvas 数在 7 轮切换中恒为 1（无上下文泄漏）；
+      已移除 `forceContextLoss()`（见「已知噪声」）
+- [x] 切换回归：Live2D ↔ 数字人 **7/7 轮全部就绪**，类型正确、音频桥每轮都被新渲染器接管
+- [ ] 长时间挂机（≥30min）无内存/显存持续增长 —— **未做**（需人工长时间观察）
+
+**已知噪声（非本版引入，dev-only）**
+- Live2D 挂载时会有 1 次 `[Live2D] WebGL context LOST`：该监听器自 `Live2DCanvas`
+  原始实现起就存在，源自 PIXI 在 StrictMode 双挂载下销毁旧上下文。
+  实测：卸载数字人期间 0 次、canvas 数不增长、功能无影响。
 
 **B 档 — 等真实素材（RPM/VRoid/自建）到位后补验**
 - [ ] 写实/二次元数字人外观（公开素材是扫描头/机器人，**外观不代表最终效果**）
@@ -485,11 +501,23 @@ idle:
 - [ ] 身体 idle 动画 + 说话动作（需 Humanoid 骨骼 + Mixamo 类素材）
 
 ### 5.5 后端
-- [ ] `python -m pytest tests/ -v` 全绿（后端须未运行）
-- [ ] `tests/test_avatar_catalog.py`、`tests/test_avatar_profile.py`、`tests/test_avatar_select.py` 覆盖：发现、校验、非法 id、热替换失败回滚
+- [x] 形象相关测试全绿：`test_avatar_profile.py`(29) + `test_avatar_catalog.py`(32) = **61 passed**；
+      与既有 `test_model_profile.py`/`test_motion_controller.py` 合并跑 **92 passed**
+- [x] 覆盖：发现/嵌套/噪声过滤/坏条目带 reason/URL 编码/路径穿越拒绝/加载校验/
+      选择回滚/情绪覆盖校验/`to_frontend_dict` 的 model_path 为可 fetch URL
+- [ ] 全量 `pytest tests/` —— **本机解释器缺 torch/fastapi 等重依赖**，历史用例收集即失败（与本轮无关）；
+      完整环境（Docker）下需另跑
 
 ### 5.6 前端静态检查
-- [ ] `cd frontend && npm run lint && npm run build`（tsc 严格模式）通过
+- [x] `tsc -b` 通过；`oxlint` **0 error**（3 warning 均为既有的 exhaustive-deps 类型）
+- [x] `vite build --config vite.config.web.ts` 通过（产物见上）
+
+### 5.7 端到端（真实浏览器 + 真实后端）
+- [x] `GET /api/avatars` 返回 1 个 Live2D + 2 个数字人（路径为可 fetch 的 public URL）
+- [x] WS 握手发 `avatar.profile{type}`；Live2D 时**额外**发旧契约 `live2d.profile`
+- [x] `avatar.select` 成功回 profile；`../../etc/passwd` → `AVATAR_NOT_FOUND`
+- [x] 选择页：模式页签 + 卡片 + 「占位素材」徽标 + 不可用条目置灰带原因
+- [x] 主界面：`data-avatar-type` 与所选一致；截图确认数字人渲染画面（张嘴/眨眼/表情）
 
 ---
 
@@ -529,7 +557,9 @@ idle:
 ## 8. 待办追踪
 
 - [x] 本文档评审通过（2026-07-25：确认"公开素材跑通 + 预留关联字段 + 耦合点补计划"）
-- [ ] Stage 0 → Stage 7 按序推进（Stage 3 与 Stage 1-2 可并行）
-- [ ] Stage 0 落地 `scripts/fetch-placeholder-avatars.sh`，实测两个素材下载可用
-- [ ] Stage 5 完成后：把实测 morph 名与标定后的 `gain` 回填本文件 §3.9
+- [x] Stage 0 → Stage 7 全部完成（Stage 3 与 Stage 1-2 并行推进），7 个独立提交
+- [x] `scripts/fetch-placeholder-avatars.sh` 落地，两个素材 + 解码器下载可用且幂等
+- [x] 实测 morph 名与标定 `gain` 已回填 §3.9 / §0.4
 - [ ] 真实素材（RPM/VRoid/自建）到位后：只改 `avatar_profile.yaml`，跑 B 档验收
+- [ ] 长时间挂机（≥30min）内存/显存观察（需人工）
+- [ ] 完整环境（Docker）下跑全量 `pytest tests/`
