@@ -7,8 +7,7 @@
  *   loading  → 连接 WS + 加载模型，StartScreen 遮罩
  *   ready    → 主界面，自动开麦，VAD 驱动语音交互
  *
- * useWebSocket 在所有非 startup 阶段保持挂载 —— 连接不能在阶段切换时被丢弃，
- * 否则选择页发出的 avatar.select 会被自己断开。
+ * WebSocket 连接由 App 单点持有（见下方注释），阶段切换不再重连。
  */
 
 import React, { useEffect, useRef } from "react";
@@ -31,6 +30,11 @@ const App: React.FC = () => {
   const lastError = useAgentStore((s) => s.lastError);
   const setAppPhase = useAgentStore((s) => s.setAppPhase);
   const setLastError = useAgentStore((s) => s.setLastError);
+
+  // WebSocket 连接在这里**唯一持有**：此前 picking / main 各挂一次，
+  // 阶段切换时前者的 cleanup 会 disconnect、后者再 connect —— 每次切页面
+  // 都断连重连一次（后端日志可见连接/断开成对刷屏，且重连窗口内上行会丢）。
+  const { sendText } = useWebSocket();
 
   const handleStart = () => {
     setLastError(null);
@@ -58,7 +62,7 @@ const App: React.FC = () => {
   if (appPhase === "picking") {
     return (
       <div className="app-container">
-        <PickingApp
+        <AvatarPicker
           onSelected={() => setAppPhase("loading")}
           onBack={() => setAppPhase("startup")}
         />
@@ -66,24 +70,16 @@ const App: React.FC = () => {
     );
   }
 
-  return <MainApp onRetry={handleRetry} />;
-};
-
-// ── PickingApp（形象选择阶段：建立连接 + 拉清单 + 选择）──
-
-const PickingApp: React.FC<{ onSelected: () => void; onBack: () => void }> = ({
-  onSelected,
-  onBack,
-}) => {
-  // 只保留连接建立，选择逻辑在 AvatarPicker / useAvatarCatalog 内部
-  useWebSocket();
-  return <AvatarPicker onSelected={onSelected} onBack={onBack} />;
+  return <MainApp onRetry={handleRetry} sendText={sendText} />;
 };
 
 // ── MainApp（仅在非 startup 阶段挂载）──
 
-const MainApp: React.FC<{ onRetry: () => void }> = ({ onRetry }) => {
-  const { isConnected, sendText } = useWebSocket();
+const MainApp: React.FC<{ onRetry: () => void; sendText: (text: string) => void }> = ({
+  onRetry,
+  sendText,
+}) => {
+  const isConnected = useAgentStore((s) => s.wsConnected);
   useAudioPlayback();
   const { startMic, isRecording } = useMicCapture();
 
