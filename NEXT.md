@@ -8,7 +8,7 @@
 ### 🆕 数字人形象接入（2026-07-25）— 已完成，待验收
 
 - [x] 运行期形象选择（开始界面选模式 + 具体模型）+ Three.js 数字人渲染器
-      全链路跑通（7 个提交，计划见 `docs/digital-human-avatar-plan.md`）
+      全链路跑通（11 个提交，计划见 `docs/digital-human-avatar-plan.md`）
 - [ ] **用户验收**：外观/口型/表情观感；选择页交互是否符合预期
 - [ ] **换真实素材**：RPM / VRoid / 自建 GLB → 放入 `frontend/public/avatar/<名字>/`
       并写 `avatar_profile.yaml`（**不改代码**）；占位素材用
@@ -20,6 +20,19 @@
       `mode: main|preview` 设计，本版未做）
 - [ ] `persona_id` / `voice_id` 的实际消费（"选角色" = 形象 + 人设 + 音色）
 - [ ] Live2D 表情 lerp 平滑（数字人已做，Live2D 仍是直接设值）
+
+### 🆕 开发环境（2026-07-25 启动验证时发现）
+
+- [ ] **封装 `scripts/dev-frontend-local.sh`**：自动检测 `node_modules/electron/dist/electron`
+      缺可执行位时复制到 ext4 侧并设 `ELECTRON_OVERRIDE_DIST_PATH`，省掉每次手敲环境变量
+      （当前需手动：见 `STATUS.md`「本地启动」）
+- [ ] **npm script 的 node 调用方式**：已改（`frontend/package.json`）以兼容 NTFS/exFAT
+      等存不住可执行位的挂载；若将来迁移到 ext4 可还原为裸命令，但保留也无副作用
+- [ ] **preload.js 报 ESM 错误**：`Cannot use import statement outside a module`
+      （vite-plugin-electron 产物 ESM vs sandbox CJS）。已确认该文件来自 `Initial commit`、
+      本轮 `electron/` 零改动、当前无功能依赖（通信全走 WebSocket）→ 待确认后删掉或修 format
+- [ ] **`/api` 代理双份维护**：`vite.config.ts`（Electron）与 `vite.config.web.ts`（dev:web）
+      各有一份，容易只改一处（已踩过一次）。改代理逻辑时**两处都要改并各自验证**
 
 ### 🆕 新需求（2026-07-19 用户提出）
 

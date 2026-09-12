@@ -1,19 +1,43 @@
 # 当前开发状态
 
 > ⚠️ 此文件记录**动态**信息，每次切换工作内容时更新。
-> 最后更新：2026-07-25
+> 最后更新：2026-07-25（含本地 Docker + Electron 启动验证与两处环境修复）
 
 ## 当前位置
 
 - **分支**: `phase-digital-human`
 - **阶段**: 数字人形象接入已完成（运行期形象选择 + Three.js 渲染器 + 双向切换）
-- **进度**: 计划 Stage 0-7 全部落地（7 个提交）；公开占位素材跑通全链路，
+- **进度**: 计划 Stage 0-7 全部落地（11 个提交）；公开占位素材跑通全链路，
   **真实数字人素材到位后只改 `avatar_profile.yaml`，不改代码**
+- **运行态**: Docker 后端（`flexiavatar-backend` + `flexiavatar-ollama`）与 Electron 前端
+  已在本地跑通并验证（选择页可用、数字人渲染正常）
 - **待办**: 用户视觉/听感验收；换真实素材（RPM/VRoid/自建）
+
+## 本地启动（本机特有，务必注意）
+
+```bash
+# 后端（Docker，已在跑；重建才需要）
+docker compose --profile gpu up -d
+
+# 前端：必须带 ELECTRON_OVERRIDE_DIST_PATH（见下方"环境修复 ②"）
+ELECTRON_OVERRIDE_DIST_PATH=~/.local/share/flexiavatar/electron-dist \
+  bash scripts/dev-frontend.sh
+```
+
+副本若被清理，重建两行：
+
+```bash
+cp -r frontend/node_modules/electron/dist ~/.local/share/flexiavatar/electron-dist
+chmod +x ~/.local/share/flexiavatar/electron-dist/electron
+```
 
 ## 最近提交
 
 ```
+a750505 fix(frontend): Electron 开发配置补 /api 反向代理
+b61d890 fix(frontend): WebSocket 连接改为 App 单点持有（消除切页重连）
+66da46b docs: 数字人接入记录 + 渲染器懒加载 + 回归清单
+309862d docs: 收录数字人选型/调研输入文档 + 指向施工计划
 ba04d2c feat(frontend): 数字人空闲行为 + 双向切换回归（owner token 验收）
 6ac70b2 feat(frontend): DigitalHumanCanvas 最小闭环（Three.js + morph 驱动）
 8d62b4e feat(frontend): 开始界面形象选择页 + picking 阶段
@@ -57,6 +81,34 @@ ba04d2c feat(frontend): 数字人空闲行为 + 双向切换回归（owner token
   表情 lerp、整脸 morph 路径、缺 morph 降级、7 轮双向切换回归
 - dev 排查口：`window.__digitalHuman`（morph 索引/权重）、`__lipSyncState`（桥归属）、
   `__lipSyncProbe`（强制 RMS，headless 无手势时验证口型通道）、`__agentStore`
+
+### 启动验证中修掉的两处环境问题（2026-07-25）
+
+**① npm script 在 NTFS 挂载上跑不起来**（`sh: vite: Permission denied`，exit 126）
+仓库在 `/media/jason/D`（fuseblk/NTFS，`default_permissions`），`node_modules/.bin`
+的 shim 没有可执行位且 `chmod +x` 存不住 → `vite`/`tsc`/`oxlint` 全部无法执行。
+已把 `frontend/package.json` 的 script 改为 **node 显式调用 CLI**（对任何文件系统有效）：
+
+```
+"dev": "node node_modules/vite/bin/vite.js"
+"build": "node node_modules/typescript/bin/tsc -b && node node_modules/vite/bin/vite.js build"
+```
+
+**② Electron 二进制同样缺可执行位**（`vite-plugin-electron` 用 `spawn()` 直接执行它）
+用 `ELECTRON_OVERRIDE_DIST_PATH` 指向 ext4 侧的副本绕过，不改仓库配置：
+
+```bash
+cp -r frontend/node_modules/electron/dist ~/.local/share/flexiavatar/electron-dist
+chmod +x ~/.local/share/flexiavatar/electron-dist/electron
+```
+
+> 想彻底解决可 `sudo mount -o remount,metadata /media/jason/D` 让该盘支持权限位（需 sudo）。
+
+**③ Electron 侧 `/api` 代理缺失（真实缺陷，已修）**
+`a750505`：Stage 4 只把 `/api` 反代加进了 `vite.config.web.ts`，漏了
+`vite.config.ts` → `npm run electron:dev` 上 `/api/avatars` 被 Vite 兜底成
+`index.html`，选择页报 `Unexpected token '<'`、整页不可用。
+**教训：两套 vite config 的行为差异必须各自在 HTTP 层验证一次。**
 
 **已知噪声（非本轮引入）**
 - Live2D 挂载时 1 次 `[Live2D] WebGL context LOST`：源自 PIXI 在 StrictMode

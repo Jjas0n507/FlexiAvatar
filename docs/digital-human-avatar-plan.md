@@ -191,6 +191,21 @@ detect_emotion() → "happy" → tts.audio.expressions[0].name
 
 ---
 
+## 2.6 实现期新发现（施工后补记）
+
+以下都是**动手后才暴露**的问题，不是设计阶段能预判的；写在这里避免后人重踩。
+
+| # | 发现 | 影响 | 处理 |
+|---|---|---|---|
+| D1 | **`/api` 反代只加了 web 那份 vite config** | `npm run electron:dev`（README 主推路径）上 `/api/*` 被 SPA 兜底成 HTML → 选择页整页不可用 | 两份 config 各配一份代理；两套路径**各自在 HTTP 层验证**（§3.7） |
+| D2 | **NTFS 挂载存不住可执行位**（仓库在 `/media/jason/D`，fuseblk + `default_permissions`） | npm script 里的裸命令（`vite`/`tsc`/`oxlint`）一律 `Permission denied`（exit 126）；`chmod +x` 无效 | `package.json` 的 script 改为 **node 显式调用 CLI**（对任何文件系统有效） |
+| D3 | **Electron 二进制同样没有可执行位** | `vite-plugin-electron` 用 `spawn()` 直接执行 `node_modules/electron/dist/electron` → 启动失败 | dev 时把 dist 复制到 ext4 侧，用 `ELECTRON_OVERRIDE_DIST_PATH` 指过去（见 README 故障排查） |
+| D4 | **StrictMode 复用同一 `<canvas>` 节点** | 上次 cleanup 的 `forceContextLoss()` 让节点永久拿不到上下文 → 第二次 `new WebGLRenderer` 崩溃 | 渲染器每次实例化**新建 canvas**；且不再调 `forceContextLoss()` |
+| D5 | **Three.js 进主包** | 主包 829KB → 1.5MB，选择页就得先下两份渲染器 | 两个渲染器 `React.lazy` 按需加载（主包回到 213KB，各成 chunk） |
+| D6 | **zustand `subscribe` 会立即用当前值回调一次** | 残留的 `avatarProfile` 会立刻"结算"刚发出的选择请求 | 发请求前主动清空 `avatarProfile`，使"非 null 到达"成为无歧义回执 |
+
+---
+
 ## 3. 详细设计
 
 ### 3.1 后端：形象清单发现
@@ -349,6 +364,10 @@ interface AvatarRendererProps {
 - 新增状态：`avatarCatalog`、`selectedAvatar`、`avatarProfile`（含 `type`）。
 - `useWebSocket.ts` 新增订阅 `avatar.profile` → `setAvatarProfile`；保留 `live2d.profile` → `setModelProfile`。
 - 新增 `hooks/useAvatarCatalog.ts`：`fetch("/api/avatars")` + 处理"**WS 未连上就点了选**"（`wsClient.send` 返回 false 时排队，`onConnected` 后补发）。
+- **`/api` 反向代理必须两套 vite config 各配一份**（`vite.config.ts` 给 Electron、`vite.config.web.ts` 给 `dev:web`）。
+  漏了任一份，该路径下 `/api/*` 会被 Vite 的 SPA 兜底成 `index.html`，前端 JSON 解析直接失败
+  （`Unexpected token '<'`），选择页整页不可用。**实测踩到**：只改了 web 那份，
+  于是 `npm run electron:dev`（README 的主推路径）上选择页是坏的，而 web 端正常。
 - `AvatarCanvas`：`key={selectedAvatar?.id ?? "default"}` 强制重建；`avatarProfile.type` 缺失/非法时**回退 Live2D**并 `console.error`（不允许黑屏）。
 
 ### 3.8 前端：选择页
@@ -518,6 +537,9 @@ idle:
 - [x] `avatar.select` 成功回 profile；`../../etc/passwd` → `AVATAR_NOT_FOUND`
 - [x] 选择页：模式页签 + 卡片 + 「占位素材」徽标 + 不可用条目置灰带原因
 - [x] 主界面：`data-avatar-type` 与所选一致；截图确认数字人渲染画面（张嘴/眨眼/表情）
+- [x] **Electron 真实会话**（CDP `:9223`，`npm run electron:dev`）：选择页渲染 2 个模式页签 + 数字人卡片、
+      无错误横幅；进入主界面后 3D 模型正常渲染；`PythonBridge` 在 Docker 模式正确复用容器（未重复 spawn）
+- [x] 两套 vite config 的代理**各自在 HTTP 层验证**一次（`curl 5173/api/avatars` → `server: uvicorn` + JSON）
 
 ---
 
@@ -563,3 +585,6 @@ idle:
 - [ ] 真实素材（RPM/VRoid/自建）到位后：只改 `avatar_profile.yaml`，跑 B 档验收
 - [ ] 长时间挂机（≥30min）内存/显存观察（需人工）
 - [ ] 完整环境（Docker）下跑全量 `pytest tests/`
+- [x] 两套 vite config 的 `/api` 代理各自验证（Electron :5173 与 dev:web 端口）
+- [x] npm script 改为 node 调用 CLI（兼容 NTFS/exFAT 等存不住可执行位的挂载）
+- [ ] 可选：封装 `scripts/dev-frontend-local.sh` 自动处理 `ELECTRON_OVERRIDE_DIST_PATH`（见 README）

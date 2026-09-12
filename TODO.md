@@ -2,7 +2,7 @@
 
 > 对照 `DESIGN_AND_PLAN.md` 阶段 1-3，记录未完成项、可选跳过项、优化机会。
 > 标记说明: ❌ 未做 | ⚠️ 部分/可优化 | 📦 属于后续阶段 | ✅ 已完成
-> 最后核对：2026-07-25
+> 最后核对：2026-07-25（含数字人接入后的复核）
 
 ---
 
@@ -78,6 +78,8 @@
 ### ⚠️ 可优化
 
 - **IdleBehaviorScheduler 前端集成** — 后端 `idle_scheduler.py` 就绪但未接前端；前端目前用自己的自主表情定时器。二选一收敛（后端调度删掉或前端接上），避免双头。
+  > 数字人路径已确认**走前端定时器**更合适（口型/表情需要与播放头同源，后端下指令会有额外往返）；
+  > Live2D 与数字人现各有一份空转定时器实现，可考虑合并成公共 hook。
 - **清理 live2d-renderer 残留** — `package.json` 依赖 + `frontend/scripts/patch-live2d.cjs` 待删（见 NEXT.md 高优先级）。
 
 ---
@@ -91,8 +93,20 @@
 - **日志文件输出** — 日志仅控制台，无文件持久化。长时间运行调试时需要。
 - **`.env.example` / `config.user.yaml.example`** — 均未提供，新开发者引导缺失。
 
+### ✅ 已完成（数字人接入，2026-07-25）
+
+- **形象抽象层** — `backend/avatar/`（profile 契约 / 目录发现 / 选择逻辑）+ 前端
+  `AvatarCanvas` 分发 + `useLipSyncAudio` 公共口型模块。计划与实测见
+  `docs/digital-human-avatar-plan.md`。
+- **运行期形象切换** — 开始界面选择页；`avatar.select` 握手 + 清单端点 `/api/avatars`；
+  桥 owner token 解决切换时的注册竞态。双向切换 7 轮回归通过。
+- **耦合点① / 预留字段** — persona 情绪映射在当前形象缺失时告警 + 回退；
+  `persona_id` / `voice_id` 已预留（只透传不消费）。
+
 ### ⚠️ 可优化
 
+- **两套 vite config 的 `/api` 代理** — `vite.config.ts`（Electron）与
+  `vite.config.web.ts`（dev:web）各一份，容易只改一处（已踩过一次）。
 - **错误处理** — LLM API 请求未设 timeout；"异常状态自动恢复 (any → IDLE)"仅有 try/except 兜底，无超时/重试。
 - **启动体验** — TTS 已启动预加载（~10s 后台完成）；ASR warmup 仍在首个连接时触发（funasr 快，影响小）。"启动画面 + 加载进度"未实现（Phase 6）。
 - **架构约束（教训固化）** — WS 消息处理器**不得在接收循环里同步 await `respond()`**（playback.done 只能从该循环读出，同步等待=自死锁）。文字/语音路径现均为 `create_task`，新增消息类型时注意。
@@ -108,3 +122,5 @@
 | VAD 帧大小检查 | 低 | `SileroVAD.frame_generator()` 丢弃不足 512 samples 的末尾帧且无警告。 |
 | WebSocket 心跳 | 低 | 当前前端主动 ping。可改后端主动 ping 检测断线。 |
 | `.env.example` | 中 | 为新开发者提供模板，列出所有环境变量（含 MKL-OpenMP 冲突说明）。 |
+| 口型增益按模型标定 | 中 | `lip_sync.gain` 因模型而异（facecap 标定 6.0）；换素材需重新标定，可考虑做一次性标定脚本/界面。 |
+| Electron 可执行位 | 低 | NTFS/exFAT 挂载上 `node_modules/electron/dist/electron` 无可执行位（`chmod` 无效）。已用 `ELECTRON_OVERRIDE_DIST_PATH` + ext4 副本绕过；可封装成脚本（见 NEXT.md）。 |
