@@ -53,7 +53,7 @@ from backend.avatar import select as avatar_select  # noqa: E402
 
 # 每个客户端的音频流水线（在形象初始化之前声明：select 需要引用它做热替换）
 client_pipelines: dict[str, AudioPipeline] = {}
-avatar_select.set_pipelines_ref({"pipelines": client_pipelines})
+avatar_select.set_pipelines_ref(client_pipelines)
 
 try:
     avatar_select.initial_avatar()

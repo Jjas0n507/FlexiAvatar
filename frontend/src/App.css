@@ -417,3 +417,137 @@ html, body, #root {
   height: 100%;
   z-index: 0;
 }
+
+/* ── 形象选择页 (AvatarPicker) ─────────────── */
+.start-card--wide {
+  max-width: min(760px, 92vw);
+  width: min(760px, 92vw);
+}
+
+.avatar-mode-tabs {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 4px 0 16px;
+}
+
+.avatar-mode-tab {
+  padding: 6px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.avatar-mode-tab:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #fff;
+}
+
+.avatar-mode-tab--active {
+  background: rgba(90, 160, 255, 0.85);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
+.avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 8px 0 18px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.avatar-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.avatar-card:hover:not(:disabled) {
+  border-color: rgba(120, 180, 255, 0.9);
+  background: rgba(90, 160, 255, 0.18);
+  transform: translateY(-2px);
+}
+
+.avatar-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.avatar-card--invalid {
+  opacity: 0.55;
+}
+
+/* 预览槽：本版只占位，将来挂预览渲染器 */
+.avatar-preview-slot {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.avatar-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.avatar-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.avatar-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.avatar-badge--warn {
+  background: rgba(255, 180, 60, 0.28);
+  color: #ffd48a;
+}
+
+.avatar-badge--err {
+  background: rgba(244, 67, 54, 0.28);
+  color: #ff9d95;
+}
+
+.avatar-card-reason {
+  font-size: 11px;
+  color: #ff9d95;
+  line-height: 1.35;
+}
+
+.start-link-btn {
+  margin-top: 14px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.start-link-btn:hover:not(:disabled) {
+  color: #fff;
+}

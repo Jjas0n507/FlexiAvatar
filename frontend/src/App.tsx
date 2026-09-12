@@ -3,8 +3,12 @@
  *
  * 阶段管理：
  *   startup  → StartScreen（未连接 WS，不加载模型）
+ *   picking  → AvatarPicker（连接 WS + 拉形象清单 + 用户选择）
  *   loading  → 连接 WS + 加载模型，StartScreen 遮罩
  *   ready    → 主界面，自动开麦，VAD 驱动语音交互
+ *
+ * useWebSocket 在所有非 startup 阶段保持挂载 —— 连接不能在阶段切换时被丢弃，
+ * 否则选择页发出的 avatar.select 会被自己断开。
  */
 
 import React, { useEffect, useRef } from "react";
@@ -12,6 +16,7 @@ import { useWebSocket } from "./hooks/useWebSocket";
 import { useAudioPlayback } from "./hooks/useAudioPlayback";
 import { useMicCapture } from "./hooks/useMicCapture";
 import AvatarCanvas from "./components/AvatarCanvas";
+import AvatarPicker from "./components/AvatarPicker";
 import StartScreen from "./components/StartScreen";
 import TopBar from "./components/TopBar";
 import ChatPanel from "./components/ChatPanel";
@@ -29,7 +34,7 @@ const App: React.FC = () => {
 
   const handleStart = () => {
     setLastError(null);
-    setAppPhase("loading");
+    setAppPhase("picking");
   };
 
   const handleRetry = () => {
@@ -50,7 +55,29 @@ const App: React.FC = () => {
     );
   }
 
+  if (appPhase === "picking") {
+    return (
+      <div className="app-container">
+        <PickingApp
+          onSelected={() => setAppPhase("loading")}
+          onBack={() => setAppPhase("startup")}
+        />
+      </div>
+    );
+  }
+
   return <MainApp onRetry={handleRetry} />;
+};
+
+// ── PickingApp（形象选择阶段：建立连接 + 拉清单 + 选择）──
+
+const PickingApp: React.FC<{ onSelected: () => void; onBack: () => void }> = ({
+  onSelected,
+  onBack,
+}) => {
+  // 只保留连接建立，选择逻辑在 AvatarPicker / useAvatarCatalog 内部
+  useWebSocket();
+  return <AvatarPicker onSelected={onSelected} onBack={onBack} />;
 };
 
 // ── MainApp（仅在非 startup 阶段挂载）──

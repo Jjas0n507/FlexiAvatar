@@ -20,9 +20,10 @@ import type {
   AvatarProfile,
   AvatarType,
   AvatarEntry,
+  AvatarCatalog,
 } from "../types";
 
-export type AppPhase = "startup" | "loading" | "ready";
+export type AppPhase = "startup" | "picking" | "loading" | "ready";
 
 export interface ChatMessage {
   id: string;
@@ -78,6 +79,10 @@ export interface AgentState {
   avatarType: AvatarType;
   selectedAvatar: AvatarEntry | null;
   setSelectedAvatar: (entry: AvatarEntry | null) => void;
+
+  // 形象清单（选择页从 GET /api/avatars 拉取）
+  avatarCatalog: AvatarCatalog | null;
+  setAvatarCatalog: (catalog: AvatarCatalog) => void;
 
   // TTS speech (合并后的 audio + timeline)
   ttsSpeech: TTSSpeechPayload | null;
@@ -187,6 +192,10 @@ export const useAgentStore = create<AgentState>()(
       selectedAvatar: entry ?? s.selectedAvatar,
     })),
   setSelectedAvatar: (entry) => set({ selectedAvatar: entry }),
+
+  // 形象清单
+  avatarCatalog: null,
+  setAvatarCatalog: (catalog) => set({ avatarCatalog: catalog }),
 
   // TTS speech
   ttsSpeech: null,

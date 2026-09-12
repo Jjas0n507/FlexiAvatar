@@ -369,8 +369,9 @@ const Live2DCanvas: React.FC = () => {
 
   useEffect(() => {
     if (loadState !== "loaded") return;
-    registerExpressionSetter(setExpression, ownerRef.current);
-    return () => registerExpressionSetter(null, ownerRef.current);
+    const owner = ownerRef.current; // 在 effect 内取一次，cleanup 不再读 ref
+    registerExpressionSetter(setExpression, owner);
+    return () => registerExpressionSetter(null, owner);
   }, [loadState, setExpression]);
 
 

@@ -24,6 +24,7 @@ services:
     volumes:
       - ./backend:/app/backend:ro
       - ./frontend/public/live2d:/app/frontend/public/live2d:ro   # ModelProfile (model_profile.yaml)
+      - ./frontend/public/avatar:/app/frontend/public/avatar:ro   # 数字人 avatar_profile.yaml + .glb
       - ./resources:/app/resources:rw
       - modelscope_cache:/root/.cache/modelscope:rw
     devices:

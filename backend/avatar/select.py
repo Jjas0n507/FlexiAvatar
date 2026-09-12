@@ -39,7 +39,9 @@ AVATAR_STATE: dict = {
     "motion": None,       # MotionController | None
 }
 
-# main.py 加载后注入（用于运行期热替换已存在 pipeline 的控制器）
+# main.py 加载后注入（用于运行期热替换已存在 pipeline 的控制器）。
+# 注意：这里持有的是 main.client_pipelines **本体**（不是它的副本/包装），
+# 否则运行期新建的 pipeline 不会出现在这里。
 _pipelines_ref: dict = {}
 
 
@@ -122,7 +124,7 @@ def apply_avatar(entry: AvatarEntry) -> AvatarInUse:
     AVATAR_STATE["current"] = in_use
 
     # 已存在的 pipeline 也换掉控制器（本版选择发生在会话前，这里是防御性处理）
-    for pipeline in _pipelines_ref.get("pipelines", {}).values():
+    for pipeline in (_pipelines_ref.get("pipelines") or {}).values():
         pipeline.set_motion_controller(AVATAR_STATE["motion"])
 
     logger.info(f"形象已应用: {entry.id} ({entry.type})「{entry.name}」")
