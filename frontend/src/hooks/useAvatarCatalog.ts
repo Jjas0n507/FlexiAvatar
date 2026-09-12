@@ -52,6 +52,7 @@ export function useAvatarCatalog(): UseAvatarCatalogResult {
   const wsConnected = useAgentStore((s) => s.wsConnected);
   const setAvatarCatalog = useAgentStore((s) => s.setAvatarCatalog);
   const setSelectedAvatar = useAgentStore((s) => s.setSelectedAvatar);
+  const setAvatarProfile = useAgentStore((s) => s.setAvatarProfile);
   const setLastError = useAgentStore((s) => s.setLastError);
 
   const [loading, setLoading] = useState(false);
@@ -65,8 +66,11 @@ export function useAvatarCatalog(): UseAvatarCatalogResult {
     reject: (e: Error) => void;
   } | null>(null);
   // 结算基线：zustand.subscribe 会**立即**用当前值回调一次。若不做基线比较，
-  // 上一次留下（或 HMR 保留）的 avatarProfile/lastError 会立刻把刚发出的请求
-  // "结算"掉 —— 表现为选择被瞬间当成功、或新选择被旧错误判失败（实测都踩到）。
+  // 上一次留下（或 HMR 保留）的 avatarProfile 会立刻把刚发出的请求"结算"掉。
+  //
+  // 不能用「对象引用比较」做基线：后端每次都是新对象，切回同一个形象时引用
+  // 必然不同却又"看起来没变"（实测：切回 Live2D 时 select 永不结算 → 卡在选择页）。
+  // 改为**发请求前主动清空 avatarProfile**，于是「非 null 到达」本身就是明确回执。
   const baselineRef = useRef<{ profile: AvatarProfile | null; error: string | null }>({
     profile: null,
     error: null,
@@ -134,11 +138,10 @@ export function useAvatarCatalog(): UseAvatarCatalogResult {
   const select = useCallback(
     (id: string): Promise<AvatarProfile> => {
       setError(null);
-      setLastError(null); // 清掉残留错误（基线同步在下面的 subscribe 回调里）
-      baselineRef.current = {
-        profile: useAgentStore.getState().avatarProfile, // 上一轮形象 = 本次的基线
-        error: null,
-      };
+      setLastError(null);
+      // 先清空：让"新 profile 到达"成为无歧义的回执（见 baselineRef 注释）
+      setAvatarProfile(null);
+      baselineRef.current = { profile: null, error: null };
       setPhase("selecting");
 
       const entry =
@@ -173,7 +176,7 @@ export function useAvatarCatalog(): UseAvatarCatalogResult {
           throw e;
         });
     },
-    [catalog, setSelectedAvatar, setLastError],
+    [catalog, setSelectedAvatar, setLastError, setAvatarProfile],
   );
 
   return { reload, select, loading, phase, error, catalog };

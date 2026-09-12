@@ -270,5 +270,9 @@ export interface AvatarEntry {
 export interface AvatarCatalog {
   live2d: AvatarEntry[];
   digital_human: AvatarEntry[];
+  /** 后端当前生效的形象 id（用于选择页默认高亮） */
+  current?: string;
+  /** 后端当前生效的类型（用于选择页默认模式页签） */
+  type?: AvatarType;
 }
 

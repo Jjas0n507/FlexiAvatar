@@ -117,6 +117,23 @@ export function stopAll(): void {
   }
 }
 
+/** 桥归属快照（dev 排查用）：切形象后应指向新渲染器实例 */
+export function bridgeState(): {
+  hasBridge: boolean;
+  hasExprSetter: boolean;
+  bridgeOwner: string | null;
+  exprOwner: string | null;
+  queued: number;
+} {
+  return {
+    hasBridge: _bridge !== null,
+    hasExprSetter: _exprSetter !== null,
+    bridgeOwner: _bridgeOwner === null ? null : String(_bridgeOwner),
+    exprOwner: _exprOwner === null ? null : String(_exprOwner),
+    queued: _queue.length,
+  };
+}
+
 export function useAudioPlayback(): void {
   useEffect(() => {
     const unsubTts = useAgentStore.subscribe(

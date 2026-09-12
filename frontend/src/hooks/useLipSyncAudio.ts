@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { registerSpeaker } from "./useAudioPlayback";
+import { registerSpeaker, bridgeState } from "./useAudioPlayback";
 import type { SpeakerBridge } from "./useAudioPlayback";
 
 export interface LipSyncController {
@@ -119,25 +119,27 @@ class LipSyncPlayer {
         .__lipSyncProbe;
       if (probe && probe.current !== null) return probe.current;
     }
-    const m = this;
     let rms = 0;
-    if (m.samples && !m.audio.paused) {
-      const goal = Math.min(Math.floor(m.audio.currentTime * m.sampleRate), m.perChannel);
-      if (goal > m.offset) {
+    if (this.samples && !this.audio.paused) {
+      const goal = Math.min(
+        Math.floor(this.audio.currentTime * this.sampleRate),
+        this.perChannel,
+      );
+      if (goal > this.offset) {
         let sum = 0;
-        for (const ch of m.samples) {
-          for (let i = m.offset; i < goal; i++) sum += ch[i] * ch[i];
+        for (const ch of this.samples) {
+          for (let i = this.offset; i < goal; i++) sum += ch[i] * ch[i];
         }
-        const n = (goal - m.offset) * m.samples.length;
+        const n = (goal - this.offset) * this.samples.length;
         const inst = Math.min(1, Math.sqrt(sum / n) * this.gain);
-        rms = m.prev + (inst - m.prev) * this.smoothing; // 指数平滑
-        m.offset = goal;
-        if (goal >= m.perChannel) m.samples = null; // 播完闭嘴
+        rms = this.prev + (inst - this.prev) * this.smoothing; // 指数平滑
+        this.offset = goal;
+        if (goal >= this.perChannel) this.samples = null; // 播完闭嘴
       } else {
-        rms = m.prev; // 媒体时钟同刻内保持
+        rms = this.prev; // 媒体时钟同刻内保持
       }
     }
-    m.prev = rms;
+    this.prev = rms;
     return rms;
   }
 
@@ -269,6 +271,10 @@ export function useLipSyncAudio(
 ): LipSyncController {
   // owner token 每次挂载新建 —— StrictMode 双挂载时后一个实例合法接管
   const ownerRef = useRef<symbol>(Symbol("lipSync"));
+  const gainRef = useRef(gain);
+  const smoothingRef = useRef(smoothing);
+  gainRef.current = gain;
+  smoothingRef.current = smoothing;
   const player = getPlayer(gain, smoothing);
 
   // 控制器引用稳定：渲染循环/定时器可以直接持有
@@ -287,11 +293,15 @@ export function useLipSyncAudio(
   useEffect(() => {
     if (!active) return;
     const owner = ownerRef.current;
+    // 必须通过 getPlayer() 取**当前**单例，不能闭包捕获本渲染时的 player：
+    // 应用开着 StrictMode，首次渲染拿到的 player 之后可能已被新实例替换，
+    // 闭包捕获旧实例会让 speak 走向已废弃的 <audio>（切形象后音频卡死/无声）。
     const bridge: SpeakerBridge = {
-      speak: (buf, mime) => player.speak(buf, mime),
+      speak: (buf, mime) => getPlayer(gainRef.current, smoothingRef.current).speak(buf, mime),
       stop: () => {
-        player.stop();
-        player.reset();
+        const p = getPlayer();
+        p.stop();
+        p.reset();
       },
     };
     registerSpeaker(bridge, owner);
@@ -311,5 +321,7 @@ export function useLipSyncAudio(
 
 // dev 排查口（与 __wsClient / __agentStore 同一约定，打包版不含）
 if (import.meta.env.DEV) {
-  (globalThis as unknown as Record<string, unknown>).__lipSyncProbe = { current: null };
+  const g = globalThis as unknown as Record<string, unknown>;
+  g.__lipSyncProbe = { current: null };
+  g.__lipSyncState = bridgeState; // 桥归属：切形象后应指向新渲染器实例
 }

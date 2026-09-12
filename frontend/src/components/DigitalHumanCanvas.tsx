@@ -33,6 +33,23 @@ const BLINK_CLOSE_MS = 70;       // 闭合用时
 const BLINK_OPEN_MS = 120;       // 张开用时（快闭慢开）
 const DRAG_ROTATE_MAX_X = 0.6;   // 俯仰限幅（弧度）
 
+/**
+ * 眼神跟随用的 morph 名（ARKit 系命名约定）。
+ *
+ * 为什么要按「左右眼各自的向内/向外」两组来写：**每只眼的 morph 只有一个方向**，
+ * 往某个方向看靠的是「同侧向外 + 对侧向内」同时抬起。逐项列名也与 §3.9 的
+ * 硬约束一致 —— 代码不做命名猜测，配不上就整条通道降级（没有眼球 morph 的
+ * 模型照样能跑）。
+ */
+const LOOK_MORPHS = {
+  lookLeft: ["eyeLookOut_L", "eyeLookIn_R"],
+  lookRight: ["eyeLookOut_R", "eyeLookIn_L"],
+  lookUp: ["eyeLookUp_L", "eyeLookUp_R"],
+  lookDown: ["eyeLookDown_L", "eyeLookDown_R"],
+} as const;
+
+type LookDirs = Record<keyof typeof LOOK_MORPHS, string[]>;
+
 /** 会话状态 → 情绪（与 Live2D 路径语义一致） */
 const STATE_EXPRESSION: Record<string, string> = {
   processing: "thinking",
@@ -77,6 +94,9 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
   const sessionState = useAgentStore((s) => s.sessionState);
 
   // ── 解析 profile（memo：只在形象变化时重算）────────
+  // 注意：resolveMouth 的返回值是**本渲染内的普通值**，不要放进 ref/依赖数组
+  // 之外的地方 —— 它曾是 ref 却进了 useEffect deps，导致 deps 恒定不变、
+  // effect 闭包永远看第一版，切换形象后口型用错映射（实测踩到）。
   const mouthGain = useMemo(() => resolveMouth(profile), [profile]);
   const expressionTable = useMemo(() => {
     const table: Record<string, Record<string, number>> = {};
@@ -95,9 +115,11 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
   const targetRef = useRef<Record<string, number>>({});       // 目标值
   const faceRef = useRef<Record<string, number>>({});         // 表情通道目标
   const blinkRef = useRef<Record<string, number>>({});        // 眨眼通道目标
+  const lookRef = useRef<Record<string, number>>({});         // 眼神跟随当前权重
+  const lookDirsRef = useRef<LookDirs | null>(null);          // 按模型实际存在的 morph 过滤后的可用方向
+  const gazeRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 }); // 归一化指针 (-1..1)
   const applyTargetsRef = useRef<() => void>(() => {});
   const rootRef = useRef<THREE.Object3D | null>(null);
-  const rigRefForFrame = rigRef;
 
   // ── 合成目标值：表情 + 口型 + 眨眼 ──────────────
   // 分通道保存、合成时叠加，避免「眨眼定时器把表情/口型覆盖掉」。
@@ -109,6 +131,9 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
         merged[name] = (merged[name] ?? 0) + base * rms;
       }
       for (const [name, v] of Object.entries(blinkRef.current)) {
+        merged[name] = Math.max(merged[name] ?? 0, v);
+      }
+      for (const [name, v] of Object.entries(lookRef.current)) {
         merged[name] = Math.max(merged[name] ?? 0, v);
       }
       targetRef.current = merged;
@@ -245,6 +270,18 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
 
         rigRef.current = { mesh: best, index: bestDict };
 
+        // 眼神跟随：只保留模型真的有的 morph，避免每帧查表失败
+        const dirs: LookDirs = { lookLeft: [], lookRight: [], lookUp: [], lookDown: [] };
+        let lookAvailable = 0;
+        for (const key of Object.keys(LOOK_MORPHS) as (keyof LookDirs)[]) {
+          dirs[key] = LOOK_MORPHS[key].filter((n) => n in bestDict);
+          lookAvailable += dirs[key].length;
+        }
+        lookDirsRef.current = lookAvailable > 0 ? dirs : null;
+        if (lookAvailable === 0) {
+          console.log("[DigitalHuman] 模型没有眼球 morph，眼神跟随通道跳过");
+        }
+
         // dev 排查口（与 __wsClient / __agentStore 同一约定，打包版不含）：
         // 暴露 morph 索引与当前权重，便于 CDP 直接验证口型/表情是否真的在动。
         if (import.meta.env.DEV) {
@@ -320,7 +357,7 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
 
       applyTargetsRef.current();
 
-      const rig = rigRefForFrame.current;
+      const rig = rigRef.current;
       if (rig) {
         const influences = rig.mesh.morphTargetInfluences;
         const dict = rig.index;
@@ -378,6 +415,25 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
         }
       }
 
+      // ── 眼神跟随：指针 → eyeLook* morph ──
+      // 每眼 morph 只有单方向，故「同侧向外 + 对侧向内」成对抬起（见 LOOK_MORPHS）。
+      // 可用名单在加载完成时按模型真实存在的 morph 过滤。
+      const look = lookDirsRef.current;
+      if (look) {
+        const { x, y } = gazeRef.current;
+        const range = profile.idle?.look_at_range || 0.8;
+        const gx = Math.max(-1, Math.min(1, x / range));
+        const gy = Math.max(-1, Math.min(1, -y / range)); // 屏幕 y 向下 → 抬头为正
+        const next: Record<string, number> = {};
+        const add = (names: string[], amount: number) => {
+          if (amount <= 0.001) return;
+          for (const n of names) next[n] = amount;
+        };
+        add(gx > 0 ? look.lookLeft : look.lookRight, Math.abs(gx));
+        add(gy > 0 ? look.lookUp : look.lookDown, Math.abs(gy));
+        lookRef.current = next; // 逐帧整体替换：指针回中时自然归零
+      }
+
       // 轻微呼吸（无骨骼动画时的"活着"感）
       const root = rootRef.current;
       if (root) root.rotation.z = Math.sin(time * 0.8) * 0.006;
@@ -408,12 +464,20 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
       });
       ktx2.dispose();
       renderer.dispose();
-      // canvas 是本实例私有的，可以安全地强制释放上下文（避免 GPU 上下文泄漏）
-      renderer.forceContextLoss();
+      // 只 dispose + 移除 canvas：本实例私有的 canvas 不再被引用后由 GC 回收，
+      // 其 WebGL 上下文随之释放。刻意不做 forceContextLoss() —— 它会触发
+      // contextlost 事件，在回归日志里制造 "WebGL context LOST" 噪声
+      // （实测每次切换都刷一条，掩盖真正的问题）。
       canvas.remove();
+      // 清掉 dev 全局：否则旧渲染器的索引会一直被读到（实测把回归探针骗过，
+      // 也让"当前是否挂着数字人"这类判断失真）
+      if (import.meta.env.DEV) {
+        delete (globalThis as unknown as Record<string, unknown>).__digitalHuman;
+      }
       console.log("[DigitalHuman] 渲染器已释放");
     };
-    // profile/mouthGain/expressionTable 变化即重建（key 已是形象 id，等价于换形象）
+    // 依赖三个 memo 值：任一变（= 换形象）就完整重建渲染器。
+    // 它们必须是**普通 memo 值**而非 ref，否则这里永远不会触发。
   }, [profile, mouthGain, expressionTable]);
 
   // ── 表情：注册到播放泵 + 会话状态驱动 ────────────
@@ -427,6 +491,30 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
   useEffect(() => {
     setExpression(STATE_EXPRESSION[sessionState] ?? "neutral");
   }, [sessionState, setExpression]);
+
+  // ── 自主表情循环（空闲时随机换情绪）─────────────
+  useEffect(() => {
+    if (loadState !== "loaded") return;
+    const cycle = profile.idle?.expression_cycle ?? [];
+    if (cycle.length === 0) return;
+    const [lo, hi] = profile.idle?.expression_interval ?? [6.0, 14.0];
+
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const delay = (lo + Math.random() * Math.max(0, hi - lo)) * 1000;
+      timer = setTimeout(() => {
+        // 说话时跳过：口型/表情该由对话驱动，定时器插一脚会互相打架
+        if (!lipSync.isSpeaking()) {
+          const name = cycle[Math.floor(Math.random() * cycle.length)];
+          console.log("[DigitalHuman] idle expression:", name);
+          setExpression(name);
+        }
+        schedule();
+      }, delay);
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  }, [loadState, profile, setExpression, lipSync]);
 
   // ── 交互：拖拽旋转 / 滚轮缩放 ───────────────────
   useEffect(() => {
@@ -451,6 +539,16 @@ const DigitalHumanCanvas: React.FC<DigitalHumanCanvasProps> = ({ profile }) => {
       container.style.cursor = "grabbing";
     };
     const onMove = (e: PointerEvent) => {
+      // 眼神跟随：任何时候移动指针都看向它（与 Live2D 的 focus 语义一致）
+      if (!isOnUI(e)) {
+        const rect = container.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          gazeRef.current = {
+            x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+            y: ((e.clientY - rect.top) / rect.height) * 2 - 1,
+          };
+        }
+      }
       if (!dragging) return;
       const root = rootRef.current;
       if (!root) return;

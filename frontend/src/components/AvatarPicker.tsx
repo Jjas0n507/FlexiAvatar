@@ -9,7 +9,7 @@
  * 不需要动这个组件的结构（详见 docs/digital-human-avatar-plan.md §3.6）。
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAgentStore } from "../stores/agent-store";
 import { useAvatarCatalog } from "../hooks/useAvatarCatalog";
 import type { AvatarEntry, AvatarType } from "../types";
@@ -71,9 +71,17 @@ const AvatarPicker: React.FC<AvatarPickerProps> = ({ onSelected, onBack }) => {
     return types;
   }, [catalog]);
 
-  const [mode, setMode] = useState<AvatarType>("digital_human");
-  const effectiveMode: AvatarType = availableTypes.includes(mode)
-    ? mode
+  // 默认页签跟随「后端当前生效的类型」，否则用户选了 Live2D、返回后
+  // 又看到数字人页签，要手动再切一次（实测体验问题）
+  const [mode, setMode] = useState<AvatarType | null>(null);
+  useEffect(() => {
+    if (mode !== null || !catalog) return;
+    if (catalog.type && availableTypes.includes(catalog.type)) setMode(catalog.type);
+  }, [catalog, availableTypes, mode]);
+
+  const requested: AvatarType = mode ?? catalog?.type ?? "digital_human";
+  const effectiveMode: AvatarType = availableTypes.includes(requested)
+    ? requested
     : (availableTypes[0] ?? "live2d");
 
   const entries = catalog?.[effectiveMode] ?? [];

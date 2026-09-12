@@ -75,7 +75,7 @@ export interface AgentState {
 
   // 形象（从后端 avatar.profile 消息接收；AvatarCanvas 据此分发渲染器）
   avatarProfile: AvatarProfile | null;
-  setAvatarProfile: (profile: AvatarProfile, entry?: AvatarEntry | null) => void;
+  setAvatarProfile: (profile: AvatarProfile | null, entry?: AvatarEntry | null) => void;
   avatarType: AvatarType;
   selectedAvatar: AvatarEntry | null;
   setSelectedAvatar: (entry: AvatarEntry | null) => void;
@@ -184,13 +184,19 @@ export const useAgentStore = create<AgentState>()(
   selectedAvatar: null,
   avatarType: "live2d",
   setAvatarProfile: (profile, entry) =>
-    set((s) => ({
-      avatarProfile: profile,
-      avatarType: profile.type,
-      // Live2D 渲染器仍从 modelProfile 取参数（结构不变，零改动）
-      modelProfile: profile.type === "live2d" ? (profile as ModelProfile) : s.modelProfile,
-      selectedAvatar: entry ?? s.selectedAvatar,
-    })),
+    set((s) => {
+      if (!profile) {
+        // 选择前主动清空：作为「新 profile 尚未到达」的明确标记（见 useAvatarCatalog）
+        return { avatarProfile: null, selectedAvatar: entry ?? s.selectedAvatar };
+      }
+      return {
+        avatarProfile: profile,
+        avatarType: profile.type,
+        // Live2D 渲染器仍从 modelProfile 取参数（结构不变，零改动）
+        modelProfile: profile.type === "live2d" ? (profile as ModelProfile) : s.modelProfile,
+        selectedAvatar: entry ?? s.selectedAvatar,
+      };
+    }),
   setSelectedAvatar: (entry) => set({ selectedAvatar: entry }),
 
   // 形象清单
