@@ -85,6 +85,10 @@ class AudioPipeline:
 
     # ── 初始化 ──────────────────────────────────
 
+    def set_motion_controller(self, motion_controller: MotionController) -> None:
+        """运行期切换形象时热替换表情控制器（setup 阶段已注入一次，这里覆盖）。"""
+        self._motion = motion_controller
+
     async def _init_engines(self):
         """懒初始化所有引擎"""
         if self._vad is None:
