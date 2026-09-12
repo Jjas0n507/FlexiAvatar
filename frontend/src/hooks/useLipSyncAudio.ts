@@ -114,6 +114,11 @@ class LipSyncPlayer {
    * 因此每帧调用一次；同一媒体时钟刻内重复调用保持上一帧值。
    */
   getRMS(): number {
+    if (import.meta.env.DEV) {
+      const probe = (globalThis as unknown as { __lipSyncProbe?: { current: number | null } })
+        .__lipSyncProbe;
+      if (probe && probe.current !== null) return probe.current;
+    }
     const m = this;
     let rms = 0;
     if (m.samples && !m.audio.paused) {
@@ -235,6 +240,10 @@ class LipSyncPlayer {
 
 // 进程级单例：<audio> + OfflineAudioContext。
 //
+// dev 排查口：__lipSyncProbe.current 非 null 时，getRMS() 直接返回该值。
+// 用途：headless/无用户手势环境下 <audio> 会被自动播放策略拦截（无播放头 →
+// RMS 恒 0），此时无法验证「口型通道」本身。该开关仅 DEV 生效，生产不读取。
+//
 // 为什么是单例而不是 per-mount：应用开着 <StrictMode>，开发模式下 effect 会
 // 「挂载 → 清理 → 再挂载」。若每次挂载新建实例并在清理时销毁，切换渲染器
 // （或开发态热更新）会打断已在播放的音频 —— 用户听到的是"第一句莫名没声"。
@@ -298,4 +307,9 @@ export function useLipSyncAudio(
   }, [player, gain, smoothing]);
 
   return controller;
+}
+
+// dev 排查口（与 __wsClient / __agentStore 同一约定，打包版不含）
+if (import.meta.env.DEV) {
+  (globalThis as unknown as Record<string, unknown>).__lipSyncProbe = { current: null };
 }

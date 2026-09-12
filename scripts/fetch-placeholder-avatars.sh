@@ -151,6 +151,29 @@ idle:
   look_at_range: 0.5
 YAML
 
+# ── 解码器（KTX2 / meshopt）：GLTFLoader 需要，随占位素材一起准备 ──
+# 真实素材同样常用这两种压缩，所以这不是占位专用件。
+FRONTEND_NM="$REPO_ROOT/frontend/node_modules/three/examples/jsm/libs"
+DEC="$REPO_ROOT/frontend/public/decoders"
+mkdir -p "$DEC/basis"
+copy_decoder() {
+  local src="$1" dst="$2"
+  if [[ -s "$dst" && $FORCE -eq 0 ]]; then
+    echo "  [skip] ${dst##*/}"
+    return 0
+  fi
+  if [[ ! -f "$src" ]]; then
+    echo "  [warn] 源文件不存在，跳过: $src" >&2
+    return 0
+  fi
+  cp "$src" "$dst"
+  echo "  [ ok ] ${dst##*/} ($(du -h "$dst" | cut -f1))"
+}
+echo "解码器 → $DEC"
+copy_decoder "$FRONTEND_NM/basis/basis_transcoder.js"   "$DEC/basis/basis_transcoder.js"
+copy_decoder "$FRONTEND_NM/basis/basis_transcoder.wasm" "$DEC/basis/basis_transcoder.wasm"
+copy_decoder "$FRONTEND_NM/meshopt_decoder.module.js"   "$DEC/meshopt_decoder.module.js"
+
 echo
 echo "完成。可用素材："
 find "$DEST" -name '*.glb' -o -name 'avatar_profile.yaml' | sort | sed 's|^|  |' || true

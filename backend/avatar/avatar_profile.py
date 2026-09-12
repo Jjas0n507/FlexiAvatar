@@ -225,12 +225,17 @@ class DigitalHumanProfile:
 
     # ── 序列化 ──────────────────────────────────
 
-    def to_frontend_dict(self) -> dict:
-        """序列化为前端可用的 JSON（带 type 判别字段）"""
+    def to_frontend_dict(self, model_url: str | None = None) -> dict:
+        """序列化为前端可用的 JSON（带 type 判别字段）。
+
+        model_url: 由 catalog 解析出的 public URL。**前端拿到的必须是可直接
+        fetch 的地址**（profile 里的 model_path 是相对模型目录的裸文件名，
+        前端无法自行拼对 —— 实测曾因此把 GLB 请求成 SPA 的 index.html）。
+        """
         return {
             "type": "digital_human",
             "name": self.name,
-            "model_path": self.model_path,
+            "model_path": model_url or self.model_path,
             "camera": self.camera,
             "morphs": {
                 "mouth_open": self.mouth_open.to_frontend_dict() if self.mouth_open else None,

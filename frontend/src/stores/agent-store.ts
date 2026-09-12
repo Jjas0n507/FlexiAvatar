@@ -210,3 +210,9 @@ export const useAgentStore = create<AgentState>()(
   setAvailableTools: (tools) => set({ availableTools: tools }),
   }))
 );
+
+// dev 排查口: 暴露到全局便于 devtools/CDP 驱动（打包版不含），
+// 与 services/ws-client.ts 的 window.__wsClient 同一套约定。
+if (import.meta.env.DEV) {
+  (globalThis as unknown as Record<string, unknown>).__agentStore = useAgentStore;
+}

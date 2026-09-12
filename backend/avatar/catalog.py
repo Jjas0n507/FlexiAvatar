@@ -75,7 +75,9 @@ class AvatarInUse:
     def to_profile_dict(self) -> dict:
         """前端渲染器直接消费的 profile payload（带 type 判别字段）"""
         if isinstance(self.profile, DigitalHumanProfile):
-            return self.profile.to_frontend_dict()
+            # entry.model_path 是 catalog 解析好的 public URL；模型本体在磁盘上的
+            # 存在性已在 load_avatar 里校验过。
+            return self.profile.to_frontend_dict(model_url=self.entry.model_path)
         data = self.profile.to_frontend_dict()
         data["type"] = "live2d"
         return data

@@ -64,7 +64,13 @@ export function useAvatarCatalog(): UseAvatarCatalogResult {
     resolve: (p: AvatarProfile) => void;
     reject: (e: Error) => void;
   } | null>(null);
-  const prevErrorRef = useRef<string | null>(useAgentStore.getState().lastError);
+  // 结算基线：zustand.subscribe 会**立即**用当前值回调一次。若不做基线比较，
+  // 上一次留下（或 HMR 保留）的 avatarProfile/lastError 会立刻把刚发出的请求
+  // "结算"掉 —— 表现为选择被瞬间当成功、或新选择被旧错误判失败（实测都踩到）。
+  const baselineRef = useRef<{ profile: AvatarProfile | null; error: string | null }>({
+    profile: null,
+    error: null,
+  });
 
   // ── 订阅「选择结果」 ────────────────────────
   useEffect(() => {
@@ -79,16 +85,16 @@ export function useAvatarCatalog(): UseAvatarCatalogResult {
     const unsubOk = useAgentStore.subscribe(
       (s) => s.avatarProfile,
       (profile) => {
-        if (profile) settle(true, profile);
+        // 只在「相比基线发生了变化且非空」时才算回执
+        if (profile && profile !== baselineRef.current.profile) settle(true, profile);
+        baselineRef.current.profile = profile;
       },
     );
-    // 只在错误**新出现**时结算：lastError 可能是上一轮的残留，
-    // 若直接用它结算，会把新一次选择立刻判失败。
     const unsubErr = useAgentStore.subscribe(
       (s) => s.lastError,
       (err) => {
-        if (err && err !== prevErrorRef.current) settle(false, err);
-        prevErrorRef.current = err;
+        if (err && err !== baselineRef.current.error) settle(false, err);
+        baselineRef.current.error = err;
       },
     );
     return () => {
@@ -128,7 +134,11 @@ export function useAvatarCatalog(): UseAvatarCatalogResult {
   const select = useCallback(
     (id: string): Promise<AvatarProfile> => {
       setError(null);
-      setLastError(null); // 清掉残留错误，避免被误判成本次选择失败
+      setLastError(null); // 清掉残留错误（基线同步在下面的 subscribe 回调里）
+      baselineRef.current = {
+        profile: useAgentStore.getState().avatarProfile, // 上一轮形象 = 本次的基线
+        error: null,
+      };
       setPhase("selecting");
 
       const entry =
