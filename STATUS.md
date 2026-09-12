@@ -110,6 +110,18 @@ chmod +x ~/.local/share/flexiavatar/electron-dist/electron
 `index.html`，选择页报 `Unexpected token '<'`、整页不可用。
 **教训：两套 vite config 的行为差异必须各自在 HTTP 层验证一次。**
 
+### 素材现状（2026-09 复测，配代理）
+
+- **Ready Player Me 作废**：`readyplayer.me` / `models.readyplayer.me` / `api.` / `docs.`
+  在权威 DNS 中均无 A 记录（`models.` 为 NXDOMAIN）→ 官方通道彻底失效，**与代理无关**
+  （同期 GitHub/VRoid/Sketchfab/Mixamo 走代理全部 200）。
+- **改用 VRoid**：已接入 three-vrm 官方示例 VRM 为 `digital_human/vroid`
+  （`avatar_profile.yaml` 入库，10.7MB 模型由脚本下载、已 gitignore），实测渲染通过：
+  57 morph、口型 `Fcl_MTH_A` 随 RMS 驱动、眨眼生效、MToon 材质与发型正常。
+  已知限制：静止 T-pose（本渲染器不驱动骨骼）、无 lookAt morph（眼神通道跳过）。
+- `scripts/fetch-placeholder-avatars.sh` 新增 `--with-vrm`，并内置**系统代理探测**
+  （gsettings 的 host/port），解决"系统代理已设但 shell 无 `*_proxy` 变量"的常见坑。
+
 **已知噪声（非本轮引入）**
 - Live2D 挂载时 1 次 `[Live2D] WebGL context LOST`：源自 PIXI 在 StrictMode
   双挂载下销毁旧上下文，该监听器原有代码即存在；canvas 数不增长、功能无影响

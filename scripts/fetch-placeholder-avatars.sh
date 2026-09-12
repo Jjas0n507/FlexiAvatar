@@ -9,8 +9,13 @@
 # 目录 frontend/public/avatar/_placeholder/ 已被 .gitignore 忽略，不入库。
 #
 # 用法：
-#   bash scripts/fetch-placeholder-avatars.sh          # 缺什么下什么（幂等）
-#   bash scripts/fetch-placeholder-avatars.sh -f       # 强制重新下载
+#   bash scripts/fetch-placeholder-avatars.sh            # 缺什么下什么（幂等，跳过 VRM）
+#   bash scripts/fetch-placeholder-avatars.sh --with-vrm # 额外下 VRoid 示例 VRM（10.7MB）
+#   bash scripts/fetch-placeholder-avatars.sh -f         # 强制重新下载
+#
+# 网络：若已配置系统代理（如 Clash 127.0.0.1:7897），shell 里通常没有 *_proxy 变量，
+#       curl/git 不会自动走代理。本脚本会尝试自动探测常见代理端口并附上。
+#       也可自行 `export https_proxy=http://127.0.0.1:7897`。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,7 +23,26 @@ DEST="$REPO_ROOT/frontend/public/avatar/_placeholder"
 BASE="https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf"
 
 FORCE=0
-[[ "${1:-}" == "-f" || "${1:-}" == "--force" ]] && FORCE=1
+WITH_VRM=0
+for arg in "$@"; do
+  case "$arg" in
+    -f|--force) FORCE=1 ;;
+    --with-vrm) WITH_VRM=1 ;;
+  esac
+done
+
+# 代理自动探测：系统代理（gsettings）常与 shell 环境变量脱节
+detect_proxy() {
+  [[ -n "${https_proxy:-}${HTTPS_PROXY:-}" ]] && return 0
+  local host port
+  host=$(timeout 5 gsettings get org.gnome.system.proxy.http host 2>/dev/null | tr -d "'")
+  port=$(timeout 5 gsettings get org.gnome.system.proxy.http port 2>/dev/null)
+  if [[ -n "$host" && -n "$port" ]] && timeout 3 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null; then
+    export https_proxy="http://$host:$port" http_proxy="http://$host:$port"
+    echo "  [info] 检测到系统代理 $host:$port，已用于本次下载"
+  fi
+}
+detect_proxy
 
 mkdir -p "$DEST/facecap" "$DEST/robot"
 
@@ -174,6 +198,30 @@ copy_decoder "$FRONTEND_NM/basis/basis_transcoder.js"   "$DEC/basis/basis_transc
 copy_decoder "$FRONTEND_NM/basis/basis_transcoder.wasm" "$DEC/basis/basis_transcoder.wasm"
 copy_decoder "$FRONTEND_NM/meshopt_decoder.module.js"   "$DEC/meshopt_decoder.module.js"
 
+# ── 可选：VRoid 示例 VRM（真实二次元素材，需 --with-vrm）──
+# VRM 命名体系与 RPM/facecap 都不同（`Face_Blendshape.Fcl_MTH_A` 等），
+# 是验证"第三类素材"的好样本；同时它的口型是 A/I/U/E/O（viseme 级，后续升级用）。
+VRM_DEST="$REPO_ROOT/frontend/public/avatar/vroid"
+if [[ $WITH_VRM -eq 1 ]]; then
+  mkdir -p "$VRM_DEST"
+  if [[ -s "$VRM_DEST/model.vrm" && $FORCE -eq 0 ]]; then
+    echo "  [skip] model.vrm 已存在 ($(du -h "$VRM_DEST/model.vrm" | cut -f1))"
+  else
+    echo "  [get ] model.vrm ← three-vrm 官方 VRM1 示例 (~10.7MB，需 --with-vrm)"
+    if timeout 300 curl -fsSL --retry 2 --connect-timeout 20 \
+         -o "$VRM_DEST/model.vrm.part" \
+         "https://raw.githubusercontent.com/pixiv/three-vrm/dev/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm"; then
+      mv "$VRM_DEST/model.vrm.part" "$VRM_DEST/model.vrm"
+      echo "  [ ok ] model.vrm $(du -h "$VRM_DEST/model.vrm" | cut -f1)"
+    else
+      rm -f "$VRM_DEST/model.vrm.part"
+      echo "  [FAIL] VRM 下载失败（网络/代理不通）" >&2
+    fi
+  fi
+else
+  echo "  [skip] VRoid 示例 VRM（未指定 --with-vrm）"
+fi
+
 echo
 echo "完成。可用素材："
 find "$DEST" -name '*.glb' -o -name 'avatar_profile.yaml' | sort | sed 's|^|  |' || true
@@ -181,3 +229,7 @@ echo
 echo "提示：这些素材仅用于验证链路，外观不代表最终数字人效果。"
 echo "      真实素材到位后：放入 frontend/public/avatar/<名字>/ 并写 avatar_profile.yaml，"
 echo "      代码无需改动（详见 docs/digital-human-avatar-plan.md §3.9）。"
+echo
+echo "注意：Ready Player Me（readyplayer.me / models.readyplayer.me）当前 DNS 已无记录，"
+echo "      官方通道不可用（2026-09 实测；第三方监测显示站点持续 Down）。"
+echo "      替代：VRoid（本脚本 --with-vrm / VRoid Studio 自建）、自建 GLB、Sketchfab 商用授权模型。"

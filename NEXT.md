@@ -10,9 +10,14 @@
 - [x] 运行期形象选择（开始界面选模式 + 具体模型）+ Three.js 数字人渲染器
       全链路跑通（11 个提交，计划见 `docs/digital-human-avatar-plan.md`）
 - [ ] **用户验收**：外观/口型/表情观感；选择页交互是否符合预期
-- [ ] **换真实素材**：RPM / VRoid / 自建 GLB → 放入 `frontend/public/avatar/<名字>/`
+- [ ] **换真实素材**：VRoid / 自建 GLB → 放入 `frontend/public/avatar/<名字>/`
       并写 `avatar_profile.yaml`（**不改代码**）；占位素材用
-      `bash scripts/fetch-placeholder-avatars.sh` 获取
+      `bash scripts/fetch-placeholder-avatars.sh` 获取（`--with-vrm` 额外拉 VRoid 示例）
+      > ⚠️ **RPM 路线作废**：`readyplayer.me`/`models.readyplayer.me` 已在 DNS 层无记录
+      > （2026-09 实测，权威 NXDOMAIN，与代理无关）。改走 VRoid。
+- [ ] **VRM 增强**（VRoid 示例已接入可跑）：接 `three-vrm` 解决 T-pose 待机动作 +
+      lookAt 眼神跟随（VRM 用扩展示意而非 morph，当前整条通道跳过）+
+      viseme 级口型（该模型已带 A/I/U/E/O 五个口型 morph）
 - [ ] **口型增益标定**：不同模型的 `jawOpen` 敏感度差异大，按真实素材调
       `lip_sync.gain`（占位 facecap 标定为 6.0）
 - [ ] 长时间挂机（≥30min）内存/显存观察

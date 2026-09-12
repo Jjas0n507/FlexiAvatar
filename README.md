@@ -239,8 +239,13 @@ expressions:
 
 > - 支持 KTX2 压缩贴图与 meshopt 压缩几何（内置解码器，脚本自动准备）
 > - 缺某个 morph 不会崩：该通道跳过并 `console.warn` 列出缺失清单
-> - 想先试跑，可 `bash scripts/fetch-placeholder-avatars.sh` 拉两个公开素材
->   （**占位用，外观不代表最终效果**）
+> - **VRM 也可直接用**（`.vrm` 就是 glTF，走同一套 profile）；已内置一份 VRoid 示例角色：
+>   `bash scripts/fetch-placeholder-avatars.sh --with-vrm`
+> - 想先试跑，`bash scripts/fetch-placeholder-avatars.sh` 另会拉两个轻量公开素材
+
+> ⚠️ **Ready Player Me 已不可用**（2026-09 实测）：`readyplayer.me` / `models.readyplayer.me`
+> 在 DNS 层已无记录（权威 NXDOMAIN），官方捏人/导出通道全部失效，**与你的本机网络无关**。
+> 替代方案：**VRoid Studio** 自建并导出 VRM（推荐）、VRoid Hub、自建 GLB、Sketchfab 商用授权模型。
 
 素材与 profile 放好后**重启后端**（后端负责扫描清单并发给前端），选择页即可选到。
 
@@ -304,6 +309,36 @@ ELECTRON_OVERRIDE_DIST_PATH=~/.local/share/flexiavatar/electron-dist bash script
 </details>
 
 <details>
+<summary><b>配了系统代理，但 curl / 脚本还是连不上外网？</b></summary>
+
+桌面环境的系统代理（gnome `gsettings` / Windows 代理）**不会自动变成 shell 的
+`*_proxy` 环境变量**，所以 `curl`、`git`、`pip`、`node` 默认都不走它。
+
+自检与手动指定：
+
+```bash
+env | grep -i proxy                                   # 看 shell 里到底有没有
+gsettings get org.gnome.system.proxy.http port        # 看系统代理端口（示例 7897）
+export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897
+curl -sI https://raw.githubusercontent.com/ | head -1 # 用能通的站点验证代理
+```
+
+`scripts/fetch-placeholder-avatars.sh` 已内置探测（读取 gsettings 的 host/port 并试连），
+检测到就自动用于本次下载。
+</details>
+
+<details>
+<summary><b>下载数字人模型时 <code>models.readyplayer.me</code> 连不上？</b></summary>
+
+**不是你的问题，RPM 已下线**：该域名及其所有子域在权威 DNS 里已无 A 记录
+（`models.` 直接 NXDOMAIN），`docs.readyplayer.me` 同样不解析 —— 换代理、换 DNS 都无效。
+
+请改用 **VRoid**：官网下载 VRoid Studio 捏人并导出 `.vrm`，或直接跑
+`bash scripts/fetch-placeholder-avatars.sh --with-vrm` 拿一份官方示例 VRM。
+`.vrm` 就是 glTF，放进 `frontend/public/avatar/<名字>/` 配好 `avatar_profile.yaml` 即可用。
+</details>
+
+<details>
 <summary><b>选择页报 <code>形象清单获取失败: Unexpected token '&#60;'</code>？</b></summary>
 
 `/api/avatars` 返回了 HTML 而不是 JSON —— 说明 Vite 的 `/api` 反向代理没生效，
@@ -344,7 +379,8 @@ Silero VAD 的硬性约束（32ms @ 16kHz），喂其他尺寸会静默产出垃
 - [ ] 麦克风采集迁移 `AudioWorklet`（替换已废弃的 ScriptProcessorNode）
 - [ ] 设置面板 UI（引擎/音色/模型切换免改文件）
 - [ ] LLM 工具调用端到端 + 内置工具集（时间/天气/计算/搜索）
-- [ ] 形象相关：选择页模型实时预览（已预留 `.avatar-preview-slot`）、真实数字人素材接入、口型 gain 标定脚本
+- [ ] 形象相关：选择页模型实时预览（已预留 `.avatar-preview-slot`）、口型 gain 标定脚本
+- [ ] VRM 增强：接 `three-vrm` 获待机动画（解决 T-pose）+ lookAt 眼神跟随 + viseme 级口型（VRM 已带 A/I/U/E/O morph）
 - [ ] "选角色" = 一次选定形象 + 人设 + 音色（`persona_id` / `voice_id` 消费）
 - [ ] 对话气泡、系统托盘、全局快捷键、打包分发
 

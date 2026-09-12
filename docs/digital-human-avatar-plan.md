@@ -48,9 +48,21 @@ AvatarCanvas key={selectedAvatar.id} ─┬─ type="live2d"        → <Live2DC
 
 ### 0.4 验证用公开素材（本机实测结论）
 
-**本机网络实测**：`readyplayer.me` / `models.readyplayer.me` / `vroid.com` 均不可达（Cloudflare 拦截，curl 000）；
-`github.com` / `raw.githubusercontent.com` / `registry.npmjs.org` 可达（200）。
-→ 官方通道拿不到 RPM/VRoid 素材，但 **GitHub 通道有足够用的验证素材**。
+**本机网络实测（2026-09，配代理复测）**：
+
+| 目标 | 结果 |
+|---|---|
+| `readyplayer.me` / `models.readyplayer.me` / `api.` / `docs.` | ❌ **DNS 层不存在**（权威 NS 返回 NXDOMAIN / 仅 SOA，无 A 记录） |
+| `github.com` / `raw.githubusercontent.com` | ✅ 200 |
+| `vroid.com/en/studio` / `hub.vroid.com` | ✅ 200（走代理） |
+| Sketchfab / Mixamo / Khronos | ✅ 200（走代理） |
+
+> **RPM 已不可用，不是代理问题**：用 DoH（Cloudflare/Google）直查权威解析，`readyplayer.me`
+> 只有 SOA 无 A 记录，`models.readyplayer.me` 是权威 NXDOMAIN；`docs.readyplayer.me`
+> 同样不解析；第三方监测显示站点持续 Down。对照同期 GitHub/VRoid/Sketchfab/Mixamo 全部 200，
+> 排除本机网络与代理因素。
+>
+> **RPM 路线作废**，替代方案见 §0.5。
 
 **已下载并解析（不是猜的）**：
 
@@ -77,6 +89,26 @@ AvatarCanvas key={selectedAvatar.id} ─┬─ type="live2d"        → <Live2DC
 **落盘策略**：不入库二进制。新增 `scripts/fetch-placeholder-avatars.sh` 按需下载到
 `frontend/public/avatar/_placeholder/`（该目录 gitignore），并随附各自 `avatar_profile.yaml`。
 理由：仓库保持轻量、Docker 构建不依赖外网、真素材到位后删掉即可。
+
+### 0.5 素材来源（RPM 作废后的替代路径）
+
+| 路径 | 可达性 | 特点 | 状态 |
+|---|---|---|---|
+| **VRoid 示例 VRM**（three-vrm 官方，MIT） | ✅ 脚本一键下载 | 真实二次元素材：完整身体/发型/MToon 材质、57 morph、口型 A/I/U/E/O（**viseme 级**）、眨眼、标准情绪 | **已接入并实测渲染通过**（`digital_human/vroid`） |
+| VRoid Studio 自建 + 导出 VRM | ✅ 官网可达 | 捏人自由，导出即带标准表情/口型 preset | 推荐，需人工操作 |
+| VRoid Hub 下载 | ✅ 可达 | 社区模型；注意各模型授权条款 | 可选 |
+| three.js `facecap.glb` | ✅ 已入库脚本 | 完整 ARKit 52 blendshape，口型/眨眼/情绪齐全；只有头 | 已接入（占位验证用） |
+| three.js `RobotExpressive.glb` | ✅ 已入库脚本 | 整脸 morph + 骨骼动画，无嘴部 morph | 已接入（验证"整脸 morph"schema 与降级） |
+| Sketchfab / Mixamo | ✅ 可达 | 商用需买授权；Mixamo 只出动画不带 blend shape | 备选 |
+
+**VRM 的已知限制**（素材缺口，非代码缺口）：
+- 静止是 **T-pose** —— 本渲染器不驱动骨骼动画。要待机动作需接 `three-vrm`，
+  或换带 `AnimationClip` 的 GLB（现有 `AnimationMixer` 通道已就绪）。
+- **无眼球注视 morph**（VRM 把 lookAt 放在扩展里）→ 眼神跟随整条通道跳过（有日志，不影响其余）。
+
+**结论：本轮无需 RPM 也能拿到"真实可用"的数字人素材** —— VRoid 路线同时满足
+"可一键获取 + 真实外观 + viseme 级口型潜力"。
+
 
 ---
 

@@ -64,6 +64,8 @@ data/
 # 占位/验证用形象素材与解码器（scripts/fetch-placeholder-avatars.sh 下载，不入库）
 frontend/public/avatar/_placeholder/
 frontend/public/decoders/
+# VRoid 示例 VRM 模型本体（10.7MB，脚本下载；profile 入库）
+frontend/public/avatar/*/model.vrm
 
 # 工作区内 npm 缓存（沙箱下 HOME 缓存不可写，走本地缓存）
 .npm-cache/

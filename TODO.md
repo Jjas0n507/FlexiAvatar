@@ -123,4 +123,6 @@
 | WebSocket 心跳 | 低 | 当前前端主动 ping。可改后端主动 ping 检测断线。 |
 | `.env.example` | 中 | 为新开发者提供模板，列出所有环境变量（含 MKL-OpenMP 冲突说明）。 |
 | 口型增益按模型标定 | 中 | `lip_sync.gain` 因模型而异（facecap 标定 6.0）；换素材需重新标定，可考虑做一次性标定脚本/界面。 |
+| VRM 待机动画 / lookAt | 中 | VRoid 示例 VRM 已接入，但静止 T-pose 且无注视 morph（VRM 用扩展定义 lookAt）。接 `three-vrm` 可一次解决二者，并顺带拿到 A/I/U/E/O viseme 级口型。 |
+| 素材来源切换 | — | Ready Player Me 已下线（DNS 无记录），文档与脚本均已改指 VRoid；后续素材调研不要再以 RPM 为默认路线。 |
 | Electron 可执行位 | 低 | NTFS/exFAT 挂载上 `node_modules/electron/dist/electron` 无可执行位（`chmod` 无效）。已用 `ELECTRON_OVERRIDE_DIST_PATH` + ext4 副本绕过；可封装成脚本（见 NEXT.md）。 |
