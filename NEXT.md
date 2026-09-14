@@ -5,6 +5,43 @@
 
 ## 当前优先级
 
+### 🆕 数字人形象接入（2026-07-25）— 已完成，待验收
+
+- [x] 运行期形象选择（开始界面选模式 + 具体模型）+ Three.js 数字人渲染器
+      全链路跑通（11 个提交，计划见 `docs/digital-human-avatar-plan.md`）
+- [ ] **用户验收**：外观/口型/表情观感；选择页交互是否符合预期
+- [ ] **换真实素材**（当前**受阻**，见下）：素材放 `frontend/public/avatar/<名字>/`
+      并写 `avatar_profile.yaml`（**不改代码**）；脚本 `bash scripts/fetch-placeholder-avatars.sh`
+      （`--with-vrm` 额外拉 VRoid 示例）
+      > 🔴 **素材来源已断**：Ready Player Me 下线 —— `readyplayer.me`/`models.readyplayer.me`
+      > 在权威 DNS 已无记录（2026-09 实测：仅 SOA / NXDOMAIN，DoH 复核一致，与代理无关）。
+      > 原方案 A1（RPM GLB）作废，改以 **VRoid** 为主。详见 `TODO.md`「待解决（数字人素材链路）」
+- [ ] **素材路线收尾**：评估 VRoid Hub / Sketchfab 商用授权 / 自建 GLB 等备选；
+      清理 `docs/digital-human-avatar-proposal.md` 中"RPM 首选"的过时表述
+- [ ] **VRM 增强**（VRoid 示例已接入可跑）：接 `three-vrm` 解决 T-pose 待机动作 +
+      lookAt 眼神跟随（VRM 用扩展示意而非 morph，当前整条通道跳过）+
+      viseme 级口型（该模型已带 A/I/U/E/O 五个口型 morph）
+- [ ] **口型增益标定**：不同模型的 `jawOpen` 敏感度差异大，按真实素材调
+      `lip_sync.gain`（占位 facecap 标定为 6.0）
+- [ ] 长时间挂机（≥30min）内存/显存观察
+- [ ] 选择页预览（已在 `AvatarPicker` 预留 `.avatar-preview-slot` + 渲染器
+      `mode: main|preview` 设计，本版未做）
+- [ ] `persona_id` / `voice_id` 的实际消费（"选角色" = 形象 + 人设 + 音色）
+- [ ] Live2D 表情 lerp 平滑（数字人已做，Live2D 仍是直接设值）
+
+### 🆕 开发环境（2026-07-25 启动验证时发现）
+
+- [ ] **封装 `scripts/dev-frontend-local.sh`**：自动检测 `node_modules/electron/dist/electron`
+      缺可执行位时复制到 ext4 侧并设 `ELECTRON_OVERRIDE_DIST_PATH`，省掉每次手敲环境变量
+      （当前需手动：见 `STATUS.md`「本地启动」）
+- [ ] **npm script 的 node 调用方式**：已改（`frontend/package.json`）以兼容 NTFS/exFAT
+      等存不住可执行位的挂载；若将来迁移到 ext4 可还原为裸命令，但保留也无副作用
+- [ ] **preload.js 报 ESM 错误**：`Cannot use import statement outside a module`
+      （vite-plugin-electron 产物 ESM vs sandbox CJS）。已确认该文件来自 `Initial commit`、
+      本轮 `electron/` 零改动、当前无功能依赖（通信全走 WebSocket）→ 待确认后删掉或修 format
+- [ ] **`/api` 代理双份维护**：`vite.config.ts`（Electron）与 `vite.config.web.ts`（dev:web）
+      各有一份，容易只改一处（已踩过一次）。改代理逻辑时**两处都要改并各自验证**
+
 ### 🆕 新需求（2026-07-19 用户提出）
 
 - [ ] **美化页面、优化交互**: UI 视觉打磨 + 交互体验（可与 Phase 6 的对话气泡/设置面板合并推进）

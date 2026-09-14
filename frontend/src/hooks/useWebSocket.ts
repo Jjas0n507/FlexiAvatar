@@ -8,7 +8,7 @@
 import { useEffect, useCallback } from "react";
 import { wsClient } from "../services/ws-client";
 import { useAgentStore } from "../stores/agent-store";
-import type { WSMessage, SessionState, ModelProfile, TTSSpeechPayload } from "../types";
+import type { WSMessage, SessionState, ModelProfile, TTSSpeechPayload, AvatarProfile } from "../types";
 
 // ponytail: 文本缓冲 — 延迟到首段 TTS 音频到达才显示，避免 SoVITS 高延迟下文字全出而语音未播
 let _pendingText = "";
@@ -25,6 +25,7 @@ export function useWebSocket() {
     updateToolProgress,
     setLive2DControl,
     setModelProfile,
+    setAvatarProfile,
     setTtsSpeech,
     setLastError,
     setAvailableTools,
@@ -133,6 +134,19 @@ export function useWebSocket() {
         const profile = msg.payload as unknown as ModelProfile;
         setModelProfile(profile);
         console.log("[WS] ModelProfile received:", profile.name);
+      })
+    );
+
+    // 形象 profile（带 type 判别：live2d | digital_human）→ 决定用哪个渲染器
+    unsubs.push(
+      wsClient.on("avatar.profile", (msg: WSMessage) => {
+        const profile = msg.payload as unknown as AvatarProfile;
+        if (!profile?.type) {
+          console.error("[WS] avatar.profile 缺少 type 字段，忽略:", profile);
+          return;
+        }
+        setAvatarProfile(profile);
+        console.log("[WS] AvatarProfile received:", profile.type, profile.name);
       })
     );
 

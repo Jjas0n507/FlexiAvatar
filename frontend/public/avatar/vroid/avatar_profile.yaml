@@ -1,0 +1,54 @@
+# VRoid 示例 VRM（three-vrm 官方 VRM1 示例，MIT）
+#
+# 模型下载：bash scripts/fetch-placeholder-avatars.sh --with-vrm
+#           （或手动放到本目录并命名 model.vrm）
+#
+# 为什么它比 RPM 更值得当样本：
+#   1. 是**真实可用的二次元素材**（完整身体 + 发型 + MToon 材质），不是占位头
+#   2. morph 命名是第三套体系：`Face_Blendshape.Fcl_MTH_A` 等
+#      （对比 facecap 的 `jawOpen`/`eyeBlink_L`、RPM 的 `jawOpen`/`eyeBlinkLeft`）
+#      → 再次印证"profile 必须逐项显式映射，代码不做命名猜测"
+#   3. 口型是 A/I/U/E/O 五个（viseme 级），后续升级音素口型有现成目标
+#
+# 已知限制（素材缺口，非代码缺口）：
+#   - 静止是 T-pose：本渲染器不驱动骨骼动画。想要待机动作需接 three-vrm，
+#     或改用带 AnimationClip 的 GLB（我们的 AnimationMixer 通道已就绪）
+#   - 暂时没有眼球注视 morph（VRM 把 lookAt 放在扩展里而非 morph），
+#     所以眼神跟随通道会整条跳过（日志有提示，不影响其余功能）
+
+name: "VRoid 示例角色"
+model_path: "model.vrm"
+
+persona_id: ""
+voice_id: ""
+
+camera:
+  position: [0.0, 1.35, 0.9]
+  target: [0.0, 1.25, 0.0]
+  fov: 30.0
+
+morphs:
+  mouth_open: "Face_Blendshape.Fcl_MTH_A"
+  blink_left: "Face_Blendshape.Fcl_EYE_Close_L"
+  blink_right: "Face_Blendshape.Fcl_EYE_Close_R"
+
+lip_sync:
+  gain: 6.0
+  smoothing: 0.5
+
+expressions:
+  neutral:   { type: "blendshapes", params: {} }
+  happy:     { type: "blendshapes", params: { Face_Blendshape.Fcl_ALL_Joy: 0.8 } }
+  sad:       { type: "blendshapes", params: { Face_Blendshape.Fcl_ALL_Sorrow: 0.8 } }
+  surprised: { type: "blendshapes", params: { Face_Blendshape.Fcl_ALL_Surprised: 0.85 } }
+  thinking:
+    type: "blendshapes"
+    params:
+      Face_Blendshape.Fcl_BRW_Sorrow: 0.5
+      Face_Blendshape.Fcl_MTH_Small: 0.4
+
+idle:
+  blink_interval: [2.5, 6.0]
+  expression_cycle: ["neutral", "happy", "thinking", "surprised"]
+  expression_interval: [6.0, 14.0]
+  look_at_range: 0.6

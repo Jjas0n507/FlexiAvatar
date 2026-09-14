@@ -28,6 +28,7 @@
 - 🖐️ **随时打断** — 角色说话时直接开口即可打断，音频、口型、状态机三者同步归位，迟到的音频段按 `utteranceId` 丢弃
 - ⚡ **流式低延迟管线** — LLM 流式输出 → 增量分句 → 有界并发合成 → 按序播放，第一句先响，不等全文
 - 🔌 **适配器架构** — VAD/ASR/LLM/TTS 每个引擎一个适配器文件，`config.user.yaml` 一行切换；`edge-tts` 作为零 GPU 备选随时可退
+- 🧑 **形象可插拔（Live2D / 3D 数字人）** — 开始界面即可选模式与具体模型：Live2D（Cubism）或 3D 数字人（Three.js + GLB morph）。两套渲染器实现同一对桥接口，换形象不动交互链路；**换模型只改 profile YAML，不改代码**
 - 🧰 **可扩展工具系统** — 往 `backend/tools/user_tools/` 丢一个 Python 文件即自动注册为 LLM 可调用工具
 - 🐳 **Docker 一键部署** — Ollama + 后端全容器化，AMD ROCm GPU 开箱即用（含 CPU profile）
 
@@ -113,6 +114,14 @@ bash scripts/dev-frontend.sh
 或一键脚本：`bash scripts/start-docker.sh`
 
 > ⚠️ **前端必须用 `scripts/dev-frontend.sh`（或任意非 snap 终端）启动**：snap 版 VSCode 集成终端会向 Electron 泄漏旧系统库路径，导致 GPU 加速失效、帧率骤降。
+>
+> 💡 **若仓库放在 NTFS/exFAT 挂载上**（如 `/media/jason/D`），Electron 二进制存不住可执行位，需指向 ext4 侧副本：
+> ```bash
+> cp -r frontend/node_modules/electron/dist ~/.local/share/flexiavatar/electron-dist
+> chmod +x ~/.local/share/flexiavatar/electron-dist/electron
+> ELECTRON_OVERRIDE_DIST_PATH=~/.local/share/flexiavatar/electron-dist bash scripts/dev-frontend.sh
+> ```
+> 详见 FAQ「npm run 报 vite: Permission denied」。
 >
 > 💡 纯 CPU 跑后端：`docker compose --profile cpu up -d`（TTS 建议切回 `edge-tts`，本地大模型推理速度取决于 CPU）。
 
@@ -203,9 +212,48 @@ persona:
 
 > 💡 删除 `config.user.yaml` 中整个 `persona` 段即可回到默认的通用助手人设。
 
-### 自定义 Live2D 模型
+### 自定义形象
 
-将 Cubism 3/4 模型放入 `frontend/public/live2d/<模型名>/`，通过 `model_profile.yaml` 声明表情/动作/口型参数映射（前后端共享同一契约），无需改代码。
+两个模式都通过「profile YAML 声明映射」接入，**前端代码零硬编码、零命名猜测**（不同模型
+的 morph/参数命名差异很大，实测 facecap 用 `browDown_L`、ReadyPlayerMe 用 `browDownLeft`）。
+
+**Live2D**：Cubism 3/4 模型放入 `frontend/public/live2d/<模型名>/`，
+用 `model_profile.yaml` 声明表情/动作/口型参数映射。放好后重启后端，选择页即出现该模型。
+
+**3D 数字人**：GLB/GLTF 放入 `frontend/public/avatar/<模型名>/`，并写一份 `avatar_profile.yaml`：
+
+```yaml
+name: "我的数字人"
+model_path: "model.glb"        # 相对本目录
+morphs:
+  mouth_open: "jawOpen"        # 口型驱动哪个 morph
+  blink_left: "eyeBlinkLeft"
+  blink_right: "eyeBlinkRight"
+lip_sync: { gain: 6.0, smoothing: 0.5 }   # gain 按模型敏感度标定
+expressions:
+  neutral:   { type: "blendshapes", params: {} }
+  happy:     { type: "blendshapes", params: { mouthSmileLeft: 0.6, mouthSmileRight: 0.6 } }
+  # 只有「整脸表情」没有逐 blendshape 的模型改用：
+  # happy:   { type: "morph", name: "Angry" }
+```
+
+> - 支持 KTX2 压缩贴图与 meshopt 压缩几何（内置解码器，脚本自动准备）
+> - 缺某个 morph 不会崩：该通道跳过并 `console.warn` 列出缺失清单
+> - **VRM 也可直接用**（`.vrm` 就是 glTF，走同一套 profile）；已内置一份 VRoid 示例角色：
+>   `bash scripts/fetch-placeholder-avatars.sh --with-vrm`
+> - 想先试跑，`bash scripts/fetch-placeholder-avatars.sh` 另会拉两个轻量公开素材
+
+> ⚠️ **Ready Player Me 已不可用**（2026-09 实测）：`readyplayer.me` / `models.readyplayer.me`
+> 在 DNS 层已无记录（权威 NXDOMAIN），官方捏人/导出通道全部失效，**与你的本机网络无关**。
+> 替代方案：**VRoid Studio** 自建并导出 VRM（推荐）、VRoid Hub、自建 GLB、Sketchfab 商用授权模型。
+
+素材与 profile 放好后**重启后端**（后端负责扫描清单并发给前端），选择页即可选到。
+
+### 自定义角色的形象/人设/音色
+
+形象（`avatar_profile.yaml` 的 `persona_id` / `voice_id`）、人设（`config.user.yaml` 的
+`persona` 段）、音色（TTS 的 `ref_audio` / 微调权重）三者目前**独立配置**；
+选择页已预留关联字段，"选角色 = 一次选定形象+人设+音色"在路线图中。
 
 ### 扩展工具
 
@@ -240,6 +288,73 @@ class WeatherTool(Tool):
 </details>
 
 <details>
+<summary><b><code>npm run</code> 报 <code>vite: Permission denied</code>（exit 126）？</b></summary>
+
+仓库放在 NTFS/exFAT 挂载上时（如 `/media/jason/D`，`fuseblk` + `default_permissions`），
+文件系统**存不住可执行位**，`node_modules/.bin` 的 shim 无法执行，`chmod +x` 也无效。
+已把 `frontend/package.json` 的 script 改为用 **node 显式调用 CLI**（`node node_modules/vite/bin/vite.js`），
+所以脚本本身不受影响。
+
+但 **Electron 二进制必须真的能执行**（`vite-plugin-electron` 用 `spawn()` 直接跑它），
+需把 dist 复制到 Linux 文件系统（ext4）并指过去：
+
+```bash
+cp -r frontend/node_modules/electron/dist ~/.local/share/flexiavatar/electron-dist
+chmod +x ~/.local/share/flexiavatar/electron-dist/electron
+ELECTRON_OVERRIDE_DIST_PATH=~/.local/share/flexiavatar/electron-dist bash scripts/dev-frontend.sh
+```
+
+彻底解决的办法是让该盘支持权限位：`sudo mount -o remount,metadata /media/jason/D`
+（或写入 `/etc/wsl.conf` 的 `[automount] options = "metadata"`，需重启 WSL）。
+</details>
+
+<details>
+<summary><b>配了系统代理，但 curl / 脚本还是连不上外网？</b></summary>
+
+桌面环境的系统代理（gnome `gsettings` / Windows 代理）**不会自动变成 shell 的
+`*_proxy` 环境变量**，所以 `curl`、`git`、`pip`、`node` 默认都不走它。
+
+自检与手动指定：
+
+```bash
+env | grep -i proxy                                   # 看 shell 里到底有没有
+gsettings get org.gnome.system.proxy.http port        # 看系统代理端口（示例 7897）
+export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897
+curl -sI https://raw.githubusercontent.com/ | head -1 # 用能通的站点验证代理
+```
+
+`scripts/fetch-placeholder-avatars.sh` 已内置探测（读取 gsettings 的 host/port 并试连），
+检测到就自动用于本次下载。
+</details>
+
+<details>
+<summary><b>下载数字人模型时 <code>models.readyplayer.me</code> 连不上？</b></summary>
+
+**不是你的问题，RPM 已下线**：该域名及其所有子域在权威 DNS 里已无 A 记录
+（`models.` 直接 NXDOMAIN），`docs.readyplayer.me` 同样不解析 —— 换代理、换 DNS 都无效。
+
+请改用 **VRoid**：官网下载 VRoid Studio 捏人并导出 `.vrm`，或直接跑
+`bash scripts/fetch-placeholder-avatars.sh --with-vrm` 拿一份官方示例 VRM。
+`.vrm` 就是 glTF，放进 `frontend/public/avatar/<名字>/` 配好 `avatar_profile.yaml` 即可用。
+</details>
+
+<details>
+<summary><b>选择页报 <code>形象清单获取失败: Unexpected token '&#60;'</code>？</b></summary>
+
+`/api/avatars` 返回了 HTML 而不是 JSON —— 说明 Vite 的 `/api` 反向代理没生效，
+请求被 SPA 兜底成了 `index.html`。
+
+Electron 与 web 各有一份 vite config（`vite.config.ts` / `vite.config.web.ts`），
+**两份都要配代理**。确认方式：
+
+```bash
+curl -i http://localhost:5173/api/avatars | head -3   # 期望 server: uvicorn + application/json
+```
+
+若返回 `content-type: text/html`，检查对应 config 的 `server.proxy['/api']` 是否存在。
+</details>
+
+<details>
 <summary><b>容器重建后 CosyVoice 报未安装？</b></summary>
 
 CosyVoice 依赖目前在容器内安装，`docker restart` 幸存但 `docker compose up --force-recreate` 会丢失（Dockerfile 固化在路线图中）。重建后需重新执行容器内安装步骤（见 `backend/tts/cosyvoice_adapter.py` 头部注释）。
@@ -264,6 +379,9 @@ Silero VAD 的硬性约束（32ms @ 16kHz），喂其他尺寸会静默产出垃
 - [ ] 麦克风采集迁移 `AudioWorklet`（替换已废弃的 ScriptProcessorNode）
 - [ ] 设置面板 UI（引擎/音色/模型切换免改文件）
 - [ ] LLM 工具调用端到端 + 内置工具集（时间/天气/计算/搜索）
+- [ ] 形象相关：选择页模型实时预览（已预留 `.avatar-preview-slot`）、口型 gain 标定脚本
+- [ ] VRM 增强：接 `three-vrm` 获待机动画（解决 T-pose）+ lookAt 眼神跟随 + viseme 级口型（VRM 已带 A/I/U/E/O morph）
+- [ ] "选角色" = 一次选定形象 + 人设 + 音色（`persona_id` / `voice_id` 消费）
 - [ ] 对话气泡、系统托盘、全局快捷键、打包分发
 
 完整状态见 [STATUS.md](STATUS.md) / [NEXT.md](NEXT.md) / [TODO.md](TODO.md)。

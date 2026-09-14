@@ -199,3 +199,80 @@ export interface AppConfig {
     silenceDurationMs: number;
   };
 }
+
+// ── 形象（Avatar）────────────────────────────
+// 后端 avatar.profile 消息按 type 判别的联合类型。
+// Live2D 沿用 ModelProfile（结构不变），数字人用 DigitalHumanProfile。
+
+export type AvatarType = "live2d" | "digital_human";
+
+/** 数字人的一个情绪实现 */
+export type AvatarExpression =
+  /** 多个 morph 加权（RPM / ARKit / VRoid / facecap 这类逐 blendshape 模型） */
+  | { type: "blendshapes"; params: Record<string, number> }
+  /** 单个整脸 morph（RobotExpressive 这类只有整脸表情的模型） */
+  | { type: "morph"; name: string };
+
+/** 口型驱动方式 */
+export type AvatarMouthOpen =
+  /** 直接驱动某个 morph 的权重（配 lip_sync.gain 标定） */
+  | { kind: "morph"; name: string }
+  /** 无嘴部 morph 时的发声代理：以 amount 强度整体叠加某个整脸 morph */
+  | { kind: "add"; name: string; amount: number };
+
+export interface DigitalHumanProfile {
+  type: "digital_human";
+  name: string;
+  model_path: string;                 // 相对 public 的 URL，如 "avatar/_placeholder/facecap.glb"
+  camera?: {
+    position?: [number, number, number];
+    target?: [number, number, number];
+    fov?: number;
+  };
+  morphs: {
+    mouth_open?: AvatarMouthOpen;
+    blink_left?: string;
+    blink_right?: string;
+  };
+  lip_sync: { gain: number; smoothing: number };
+  expressions: Record<string, AvatarExpression>;
+  idle: {
+    blink_interval: [number, number];
+    expression_cycle: string[];
+    expression_interval: [number, number];
+    look_at_range: number;
+  };
+  // 预留关联字段（本版只显示，不消费）
+  persona_id?: string;
+  voice_id?: string;
+}
+
+export interface Live2DAvatarProfile extends ModelProfile {
+  type: "live2d";
+}
+
+export type AvatarProfile = Live2DAvatarProfile | DigitalHumanProfile;
+
+/** 后端 /api/avatars 与 avatar.select 的形象清单条目 */
+export interface AvatarEntry {
+  id: string;
+  name: string;
+  type: AvatarType;
+  model_path: string;
+  profile_path: string;
+  valid: boolean;
+  reason?: string;
+  // 预留关联字段（本版只显示，不消费）
+  persona_id?: string;
+  voice_id?: string;
+}
+
+export interface AvatarCatalog {
+  live2d: AvatarEntry[];
+  digital_human: AvatarEntry[];
+  /** 后端当前生效的形象 id（用于选择页默认高亮） */
+  current?: string;
+  /** 后端当前生效的类型（用于选择页默认模式页签） */
+  type?: AvatarType;
+}
+

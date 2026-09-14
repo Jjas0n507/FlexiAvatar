@@ -13,7 +13,8 @@ import React, { useRef, useEffect, useCallback, useState } from "react";
 import * as PIXI from "pixi.js";
 import { Live2DModel, config as l2dConfig } from "pixi-live2d-display/cubism4";
 import { useAgentStore } from "../stores/agent-store";
-import { registerSpeaker, registerExpressionSetter } from "../hooks/useAudioPlayback";
+import { useLipSyncAudio } from "../hooks/useLipSyncAudio";
+import { registerExpressionSetter } from "../hooks/useAudioPlayback";
 import type { Live2DControlPayload, ModelProfile } from "../types";
 
 // pixi-live2d-display 内部引用全局 PIXI（Ticker/utils）
@@ -102,15 +103,13 @@ const Live2DCanvas: React.FC = () => {
   const exprDefsRef = useRef<Array<{ Name: string; File?: string }>>([]);
   const fitRef = useRef<(() => void) | null>(null);
 
-  // 口型状态：bridge 写入，beforeModelUpdate 消费（同一媒体时钟：el.currentTime）
-  const mouthRef = useRef<{
-    el: HTMLAudioElement | null;
-    samples: Float32Array[] | null;
-    sampleRate: number;
-    perChannel: number;
-    offset: number;
-    prev: number;
-  }>({ el: null, samples: null, sampleRate: 0, perChannel: 0, offset: 0, prev: 0 });
+  // ── 口型（公共模块：解码 + <audio> 播放 + RMS 采样窗口）──
+  // bridge 在公共模块内注册（带 owner token，切形象时不会被旧实例踢掉）；
+  // 这里只在 beforeModelUpdate 里拉取值写参数。
+  const lipSync = useLipSyncAudio();
+
+  // owner token：本实例对 speak/expression 桥的所有权标识
+  const ownerRef = useRef<symbol>(Symbol("live2d"));
 
   // 订阅 profile 更新
   useEffect(() => {
@@ -205,26 +204,8 @@ const Live2DCanvas: React.FC = () => {
         internal.on("beforeModelUpdate", () => {
           const setP = setParamRef.current;
           for (const [id, v] of Object.entries(overridesRef.current)) setP(id, v);
-          // 口型：播放位置 = <audio> 媒体时钟，消费解码采样窗口
-          const m = mouthRef.current;
-          let rms = 0;
-          if (m.samples && m.el && !m.el.paused) {
-            const goal = Math.min(Math.floor(m.el.currentTime * m.sampleRate), m.perChannel);
-            if (goal > m.offset) {
-              let sum = 0;
-              for (const ch of m.samples) {
-                for (let i = m.offset; i < goal; i++) sum += ch[i] * ch[i];
-              }
-              const n = (goal - m.offset) * m.samples.length;
-              const inst = Math.min(1, Math.sqrt(sum / n) * 5);
-              rms = m.prev + (inst - m.prev) * 0.5; // 指数平滑
-              m.offset = goal;
-              if (goal >= m.perChannel) m.samples = null; // 播完闭嘴
-            } else {
-              rms = m.prev; // 媒体时钟同刻内保持
-            }
-          }
-          m.prev = rms;
+          // 口型：与 <audio> 媒体时钟同源，由公共口型模块按采样窗口给出
+          const rms = lipSync.getRMS();
           for (const id of lipSyncIdsRef.current) setP(id, rms);
         });
 
@@ -380,138 +361,19 @@ const Live2DCanvas: React.FC = () => {
     overridesRef.current = { ...(FALLBACK_EXPRESSION_PARAMS[name] ?? {}) };
   }, [applyNativeExpression, resetNativeExpression]);
 
-  // ── speak/stop 桥（useAudioPlayback 播放队列 → RMS 口型）──
+  // ── 表情桥 + 口型桥（公共口型模块负责解码/播放/RMS）──
   //
   // 音频输出走 <audio>（媒体线程）；解码用 OfflineAudioContext（纯内存，
   // 永不开输出流）。播放位置与采样消费同源（el.currentTime），结构上不漂移。
+  // 详见 hooks/useLipSyncAudio.ts。
 
   useEffect(() => {
     if (loadState !== "loaded") return;
-
-    const el = new Audio();
-    el.preload = "auto";
-    const mouth = mouthRef.current; // 稳定模块对象，非 DOM 节点
-    mouth.el = el;
-
-    // 预热音频输出管线：Chromium 首次 <audio> 播放需初始化系统音频设备，
-    // 期间 currentTime 正常推进（口型有值）但实际无声音输出。
-    // 播放 50ms 静音 WAV 触发管线初始化，消除首句前几个字的无声问题。
-    (async () => {
-      try {
-        const sr = 24000, ms = 50, n = Math.floor(sr * ms / 1000), ds = n * 2;
-        const buf = new ArrayBuffer(44 + ds); const v = new DataView(buf);
-        const w = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-        w(0, 'RIFF'); v.setUint32(4, 36 + ds, true); w(8, 'WAVE');
-        w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-        v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-        w(36, 'data'); v.setUint32(40, ds, true);
-        const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
-        el.src = url; await el.play(); el.pause(); el.currentTime = 0;
-        URL.revokeObjectURL(url);
-        console.log('[Audio] pipeline primed');
-      } catch { /* 静默失败，不影响后续播放 */ }
-    })();
-
-    const decodeCtx = new OfflineAudioContext(1, 1, 44100);
-    let currentUrl: string | null = null;
-    let finishCurrent: (() => void) | null = null;
-
-    const clearSamples = () => {
-      mouth.samples = null;
-      mouth.offset = 0;
-      mouth.prev = 0;
-    };
-    const revokeUrl = () => {
-      if (currentUrl) {
-        URL.revokeObjectURL(currentUrl);
-        currentUrl = null;
-      }
-    };
-
-    registerSpeaker({
-      speak: async (buf: ArrayBuffer, mime: string) => {
-        if (!modelRef.current) return;
-        console.log(`[Audio] speak: ${buf.byteLength}B ${mime}`);
-        // Blob 先建（复制字节），decodeAudioData 会 detach 原 buffer
-        const blob = new Blob([buf], { type: mime });
-        let decoded: AudioBuffer;
-        try {
-          decoded = await decodeCtx.decodeAudioData(buf);
-        } catch (e) {
-          console.error("[Audio] decode failed:", e);
-          throw e; // pump 捕获后跳本段
-        }
-        console.log(`[Audio] decoded: ${decoded.duration.toFixed(2)}s @${decoded.sampleRate}Hz`);
-
-        revokeUrl();
-        currentUrl = URL.createObjectURL(blob);
-        el.src = currentUrl;
-
-        const m = mouthRef.current;
-        m.sampleRate = decoded.sampleRate;
-        m.perChannel = decoded.length;
-        m.samples = Array.from({ length: decoded.numberOfChannels }, (_, i) =>
-          decoded.getChannelData(i),
-        );
-        m.offset = 0;
-        m.prev = 0;
-
-        await new Promise<void>((resolve) => {
-          let done = false;
-          const finish = (reason: string) => {
-            if (done) return;
-            done = true;
-            clearTimeout(watchdog);
-            if (reason === "ended") console.log("[Audio] ended");
-            else console.warn(`[Audio] finish: ${reason}`);
-            resolve();
-          };
-          // 看门狗: onended 偶发丢失会永久卡死泵（后续段全部不播 = 听感截断）。
-          // 读播放头判定：还在正常推进就按剩余时长顺延（绝不切尾音），
-          // 播完/停滞才放行。
-          const checkEnd = () => {
-            if (done) return;
-            const remain = decoded.duration - el.currentTime;
-            if (!el.paused && el.currentTime > 0 && isFinite(remain) && remain > 0.05) {
-              watchdog = setTimeout(checkEnd, Math.max(remain * 1000 + 300, 250));
-            } else {
-              finish(`watchdog (onended lost? t=${el.currentTime.toFixed(2)}/${decoded.duration.toFixed(2)})`);
-            }
-          };
-          let watchdog = setTimeout(checkEnd, decoded.duration * 1000 + 750);
-          finishCurrent = () => finish("stopped");
-          el.onended = () => finish("ended");
-          el.onerror = () => finish(`media error ${el.error?.code ?? "?"} ${el.error?.message ?? ""}`);
-          el.play()
-            .then(() => console.log("[Audio] playing"))
-            .catch((e) => finish(`play() rejected: ${e}`));
-        });
-        finishCurrent = null;
-        clearSamples();
-        revokeUrl();
-      },
-      stop: () => {
-        el.pause();
-        clearSamples();
-        finishCurrent?.(); // 解锁泵循环里 pending 的 speak
-        finishCurrent = null;
-        revokeUrl();
-      },
-    });
-    registerExpressionSetter(setExpression);
-    console.log("[Audio] speaker bridge registered");
-
-    return () => {
-      registerSpeaker(null);
-      registerExpressionSetter(null);
-      el.pause();
-      clearSamples();
-      finishCurrent?.();
-      finishCurrent = null;
-      revokeUrl();
-      mouth.el = null;
-    };
+    const owner = ownerRef.current; // 在 effect 内取一次，cleanup 不再读 ref
+    registerExpressionSetter(setExpression, owner);
+    return () => registerExpressionSetter(null, owner);
   }, [loadState, setExpression]);
+
 
   // ── 自主表情定时器 ────────────────────────────
 
@@ -525,8 +387,7 @@ const Live2DCanvas: React.FC = () => {
       const delay = (minInterval + Math.random() * (maxInterval - minInterval)) * 1000;
       autoBehaviorTimerRef.current = setTimeout(() => {
         // 说话时跳过表情切换：原生表达式会在 beforeModelUpdate 之后覆写口型参数
-        const m = mouthRef.current;
-        if (m.samples && m.el && !m.el.paused) {
+        if (lipSync.isSpeaking()) {
           scheduleNext();
           return;
         }

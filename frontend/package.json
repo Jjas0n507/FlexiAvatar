@@ -5,20 +5,22 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "vite",
-    "dev:web": "vite --config vite.config.web.ts",
-    "build": "tsc -b && vite build",
-    "build:electron": "npm run build && electron-builder",
-    "lint": "oxlint",
-    "preview": "vite preview",
-    "electron:dev": "vite",
-    "electron:build": "electron-builder"
+    "//": "用 node 显式调用 CLI 而非裸命令：本仓库常放在 NTFS/exFAT 挂载上（如 /media/jason/D），这类文件系统存不住可执行位，node_modules/.bin 的 shim 会 `Permission denied`（exit 126）。node 调用对任何文件系统都有效。",
+    "dev": "node node_modules/vite/bin/vite.js",
+    "dev:web": "node node_modules/vite/bin/vite.js --config vite.config.web.ts",
+    "build": "node node_modules/typescript/bin/tsc -b && node node_modules/vite/bin/vite.js build",
+    "build:electron": "npm run build && node node_modules/electron-builder/out/cli/cli.js",
+    "lint": "node node_modules/oxlint/bin/oxlint",
+    "preview": "node node_modules/vite/bin/vite.js preview",
+    "electron:dev": "node node_modules/vite/bin/vite.js",
+    "electron:build": "node node_modules/electron-builder/out/cli/cli.js"
   },
   "dependencies": {
     "pixi-live2d-display": "^0.4.0",
     "pixi.js": "^6.5.10",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "three": "^0.186.0",
     "url": "^0.11.4",
     "zustand": "^5.0.14"
   },
@@ -26,6 +28,7 @@
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.0.2",
     "electron": "^41.10.2",
     "electron-builder": "^26.15.3",

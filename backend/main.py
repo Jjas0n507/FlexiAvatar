@@ -25,6 +25,7 @@ from backend.tools.registry import ToolRegistry
 from backend.live2d.motion_controller import MotionController
 from backend.audio_pipeline import AudioPipeline
 from backend.memory import MemoryManager
+from backend.avatar.catalog import discover_avatars, find_entry
 
 # ── 日志 ─────────────────────────────────────────
 
@@ -46,26 +47,20 @@ session_manager = SessionManager()
 tool_registry = ToolRegistry()
 memory_manager = MemoryManager(storage_dir=config.get("memory.data_dir", "data"))
 
-# Phase 0.6: 加载 ModelProfile
+# 形象状态与选择逻辑在 backend/avatar/select.py（不依赖 FastAPI，便于单测）
+
+from backend.avatar import select as avatar_select  # noqa: E402
+
+# 每个客户端的音频流水线（在形象初始化之前声明：select 需要引用它做热替换）
+client_pipelines: dict[str, AudioPipeline] = {}
+avatar_select.set_pipelines_ref(client_pipelines)
+
 try:
-    from backend.live2d.model_profile import ModelProfile
-    model_dir = config.get("live2d.model_dir", "")
-    if model_dir:
-        model_profile = ModelProfile.load(model_dir)
-        persona = config.get("persona") or {}
-        motion_controller = MotionController(
-            profile=model_profile,
-            emotion_expression_map=persona.get("emotion_expression_map") or None,
-        )
-        logger.info(f"ModelProfile loaded: {model_profile.name}")
-    else:
-        model_profile = None
-        motion_controller = MotionController()
-        logger.warning("No live2d.model_dir configured, using hardcoded fallback")
-except Exception as e:
-    logger.error(f"Failed to load ModelProfile: {e}")
-    model_profile = None
-    motion_controller = MotionController()
+    avatar_select.initial_avatar()
+    if avatar_select.current() is None:
+        logger.warning("未找到可用形象，MotionController 走硬编码 fallback")
+except Exception as e:  # noqa: BLE001
+    logger.error(f"形象初始化失败: {e}", exc_info=True)
 
 # 加载工具
 tool_count = tool_registry.load_all()
@@ -126,15 +121,12 @@ async def broadcast_state(state: SessionState, reason: str = "") -> None:
 # ── 消息处理器 ──────────────────────────────────
 
 # 每个客户端的音频流水线
-client_pipelines: dict[str, AudioPipeline] = {}
-
-
 async def _get_or_create_pipeline(client_id: str, websocket: WebSocket) -> AudioPipeline:
     """获取或创建客户端的音频流水线"""
     if client_id not in client_pipelines:
         pipeline = AudioPipeline(
             session_manager=session_manager,
-            motion_controller=motion_controller,
+            motion_controller=avatar_select.motion_controller(),
             memory_manager=memory_manager,
             on_tts_audio=lambda payload: _send_tts(client_id, payload),
             on_live2d_control=lambda msg: send_to(client_id, {
@@ -156,6 +148,7 @@ async def _get_or_create_pipeline(client_id: str, websocket: WebSocket) -> Audio
                 "payload": {"text": text, "isFirstChunk": first, "isLastChunk": last},
             }),
         )
+        pipeline.set_motion_controller(avatar_select.motion_controller())  # 跟随当前形象
         client_pipelines[client_id] = pipeline
         asyncio.create_task(pipeline.run())
     return client_pipelines[client_id]
@@ -256,6 +249,74 @@ async def handle_playback_done(client_id: str, payload: dict) -> None:
         logger.warning(f"playback.done from unknown client {client_id}")
 
 
+# ── 形象消息 ────────────────────────────────────
+
+
+def _avatar_profile_message() -> dict | None:
+    """当前形象的 profile payload（带 type 判别字段）。"""
+    payload = avatar_select.avatar_profile_payload()
+    if payload is None:
+        return None
+    return {
+        "type": "avatar.profile",
+        "id": str(uuid.uuid4()),
+        "timestamp": int(time.time() * 1000),
+        "payload": payload,
+    }
+
+
+def _live2d_profile_message() -> dict | None:
+    """旧契约（前端 modelProfile），仅在当前是 Live2D 形象时发送。"""
+    payload = avatar_select.live2d_profile_payload()
+    if payload is None:
+        return None
+    return {
+        "type": "live2d.profile",
+        "id": str(uuid.uuid4()),
+        "timestamp": int(time.time() * 1000),
+        "payload": payload,
+    }
+
+
+async def _send_avatar_profile(websocket: WebSocket) -> None:
+    msg = _avatar_profile_message()
+    if msg:
+        await websocket.send_json(msg)
+    old = _live2d_profile_message()
+    if old:
+        await websocket.send_json(old)
+
+
+async def handle_avatar_select(client_id: str, payload: dict, websocket: WebSocket) -> None:
+    """运行期切换形象。
+
+    客户端只传 id（路径一律由后端从磁盘重算，防路径穿越）；
+    校验 / 加载 / 回滚的判定都在 avatar_select.handle_select_request（可单测）。
+    """
+    avatar_id = str(payload.get("id") or "")
+    logger.info(f"形象选择请求: {avatar_id!r} from {client_id}")
+
+    result = avatar_select.handle_select_request(avatar_id)
+
+    if not result.ok:
+        if result.code == "AVATAR_NOT_FOUND":
+            logger.warning(f"未知形象 id: {avatar_id!r}")
+        await websocket.send_json({
+            "type": "error",
+            "id": str(uuid.uuid4()),
+            "timestamp": int(time.time() * 1000),
+            "payload": {
+                "code": result.code,
+                "message": result.message,
+                "recoverable": True,
+            },
+        })
+        return
+
+    await _send_avatar_profile(websocket)
+    await broadcast_state(session_manager.state, reason="avatar_selected")
+
+
 # 消息处理器映射
 MESSAGE_HANDLERS = {
     "user.interrupt": handle_interrupt,
@@ -263,6 +324,7 @@ MESSAGE_HANDLERS = {
     "audio.chunk": handle_audio_chunk,
     "ping": handle_ping,
     "playback.done": handle_playback_done,
+    "avatar.select": handle_avatar_select,
 }
 
 
@@ -299,6 +361,19 @@ async def get_tools():
             "parameters": tool.parameters_model().model_json_schema(),
         }
     return {"tools": tools_info}
+
+
+@app.get("/api/avatars")
+async def get_avatars():
+    """形象清单：前端选择页据此渲染（路径由后端计算，前端零硬编码）。"""
+    catalog = discover_avatars()
+    in_use = avatar_select.current()
+    return {
+        "live2d": [e.to_dict() for e in catalog["live2d"]],
+        "digital_human": [e.to_dict() for e in catalog["digital_human"]],
+        "current": in_use.entry.id if in_use else "",
+        "type": in_use.type if in_use else config.get("avatar.type", "live2d"),
+    }
 
 
 @app.get("/api/config")
@@ -346,14 +421,8 @@ async def websocket_endpoint(websocket: WebSocket):
         },
     })
 
-    # Phase 0.7: 发送 ModelProfile 到前端
-    if model_profile is not None:
-        await websocket.send_json({
-            "type": "live2d.profile",
-            "id": str(uuid.uuid4()),
-            "timestamp": int(time.time() * 1000),
-            "payload": model_profile.to_frontend_dict(),
-        })
+    # 形象 profile：avatar.profile（新契约，带 type）+ live2d.profile（旧契约，仅 Live2D）
+    await _send_avatar_profile(websocket)
 
     try:
         while True:
@@ -380,7 +449,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if handler:
                 try:
                     # audio.chunk 和 chat.text 需要传递 websocket 对象
-                    if msg_type in ("audio.chunk", "chat.text"):
+                    if msg_type in ("audio.chunk", "chat.text", "avatar.select"):
                         await handler(client_id, payload, websocket)
                     else:
                         await handler(client_id, payload)

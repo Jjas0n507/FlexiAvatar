@@ -122,6 +122,17 @@ live2d:
   idle_motion_group: "idle"
   breathing_rate: 0.8
 
+# ── 形象（Avatar）─────────────────────────────
+# type: 默认形象类型（用户在选择页选定前的初始值） live2d | digital_human
+# 选择只在进程内生效，不落盘（见 docs/digital-human-avatar-plan.md §3.3）
+avatar:
+  type: "live2d"
+  selected: ""                                   # 运行期选中 id，如 "digital_human/facecap"
+  live2d:
+    dir: "frontend/public/live2d"
+  digital_human:
+    dir: "frontend/public/avatar"
+
 # ── 人物设定 ─────────────────────────────────
 persona:
   name: "小助手"

@@ -17,9 +17,13 @@ import type {
   Live2DControlPayload,
   ModelProfile,
   TTSSpeechPayload,
+  AvatarProfile,
+  AvatarType,
+  AvatarEntry,
+  AvatarCatalog,
 } from "../types";
 
-export type AppPhase = "startup" | "loading" | "ready";
+export type AppPhase = "startup" | "picking" | "loading" | "ready";
 
 export interface ChatMessage {
   id: string;
@@ -65,9 +69,20 @@ export interface AgentState {
   live2dControl: Live2DControlPayload | null;
   setLive2DControl: (control: Live2DControlPayload | null) => void;
 
-  // ModelProfile (从后端 live2d.profile 消息接收)
+  // ModelProfile (从后端 live2d.profile 消息接收；Live2D 渲染器消费)
   modelProfile: ModelProfile | null;
   setModelProfile: (profile: ModelProfile) => void;
+
+  // 形象（从后端 avatar.profile 消息接收；AvatarCanvas 据此分发渲染器）
+  avatarProfile: AvatarProfile | null;
+  setAvatarProfile: (profile: AvatarProfile | null, entry?: AvatarEntry | null) => void;
+  avatarType: AvatarType;
+  selectedAvatar: AvatarEntry | null;
+  setSelectedAvatar: (entry: AvatarEntry | null) => void;
+
+  // 形象清单（选择页从 GET /api/avatars 拉取）
+  avatarCatalog: AvatarCatalog | null;
+  setAvatarCatalog: (catalog: AvatarCatalog) => void;
 
   // TTS speech (合并后的 audio + timeline)
   ttsSpeech: TTSSpeechPayload | null;
@@ -164,6 +179,30 @@ export const useAgentStore = create<AgentState>()(
   modelProfile: null,
   setModelProfile: (profile) => set({ modelProfile: profile }),
 
+  // 形象
+  avatarProfile: null,
+  selectedAvatar: null,
+  avatarType: "live2d",
+  setAvatarProfile: (profile, entry) =>
+    set((s) => {
+      if (!profile) {
+        // 选择前主动清空：作为「新 profile 尚未到达」的明确标记（见 useAvatarCatalog）
+        return { avatarProfile: null, selectedAvatar: entry ?? s.selectedAvatar };
+      }
+      return {
+        avatarProfile: profile,
+        avatarType: profile.type,
+        // Live2D 渲染器仍从 modelProfile 取参数（结构不变，零改动）
+        modelProfile: profile.type === "live2d" ? (profile as ModelProfile) : s.modelProfile,
+        selectedAvatar: entry ?? s.selectedAvatar,
+      };
+    }),
+  setSelectedAvatar: (entry) => set({ selectedAvatar: entry }),
+
+  // 形象清单
+  avatarCatalog: null,
+  setAvatarCatalog: (catalog) => set({ avatarCatalog: catalog }),
+
   // TTS speech
   ttsSpeech: null,
   setTtsSpeech: (speech) => set({ ttsSpeech: speech }),
@@ -177,3 +216,9 @@ export const useAgentStore = create<AgentState>()(
   setAvailableTools: (tools) => set({ availableTools: tools }),
   }))
 );
+
+// dev 排查口: 暴露到全局便于 devtools/CDP 驱动（打包版不含），
+// 与 services/ws-client.ts 的 window.__wsClient 同一套约定。
+if (import.meta.env.DEV) {
+  (globalThis as unknown as Record<string, unknown>).__agentStore = useAgentStore;
+}

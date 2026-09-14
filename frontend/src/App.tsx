@@ -3,15 +3,19 @@
  *
  * 阶段管理：
  *   startup  → StartScreen（未连接 WS，不加载模型）
+ *   picking  → AvatarPicker（连接 WS + 拉形象清单 + 用户选择）
  *   loading  → 连接 WS + 加载模型，StartScreen 遮罩
  *   ready    → 主界面，自动开麦，VAD 驱动语音交互
+ *
+ * WebSocket 连接由 App 单点持有（见下方注释），阶段切换不再重连。
  */
 
 import React, { useEffect, useRef } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useAudioPlayback } from "./hooks/useAudioPlayback";
 import { useMicCapture } from "./hooks/useMicCapture";
-import Live2DCanvas from "./components/Live2DCanvas";
+import AvatarCanvas from "./components/AvatarCanvas";
+import AvatarPicker from "./components/AvatarPicker";
 import StartScreen from "./components/StartScreen";
 import TopBar from "./components/TopBar";
 import ChatPanel from "./components/ChatPanel";
@@ -27,9 +31,14 @@ const App: React.FC = () => {
   const setAppPhase = useAgentStore((s) => s.setAppPhase);
   const setLastError = useAgentStore((s) => s.setLastError);
 
+  // WebSocket 连接在这里**唯一持有**：此前 picking / main 各挂一次，
+  // 阶段切换时前者的 cleanup 会 disconnect、后者再 connect —— 每次切页面
+  // 都断连重连一次（后端日志可见连接/断开成对刷屏，且重连窗口内上行会丢）。
+  const { sendText } = useWebSocket();
+
   const handleStart = () => {
     setLastError(null);
-    setAppPhase("loading");
+    setAppPhase("picking");
   };
 
   const handleRetry = () => {
@@ -50,13 +59,27 @@ const App: React.FC = () => {
     );
   }
 
-  return <MainApp onRetry={handleRetry} />;
+  if (appPhase === "picking") {
+    return (
+      <div className="app-container">
+        <AvatarPicker
+          onSelected={() => setAppPhase("loading")}
+          onBack={() => setAppPhase("startup")}
+        />
+      </div>
+    );
+  }
+
+  return <MainApp onRetry={handleRetry} sendText={sendText} />;
 };
 
 // ── MainApp（仅在非 startup 阶段挂载）──
 
-const MainApp: React.FC<{ onRetry: () => void }> = ({ onRetry }) => {
-  const { isConnected, sendText } = useWebSocket();
+const MainApp: React.FC<{ onRetry: () => void; sendText: (text: string) => void }> = ({
+  onRetry,
+  sendText,
+}) => {
+  const isConnected = useAgentStore((s) => s.wsConnected);
   useAudioPlayback();
   const { startMic, isRecording } = useMicCapture();
 
@@ -112,7 +135,7 @@ const MainApp: React.FC<{ onRetry: () => void }> = ({ onRetry }) => {
 
   return (
     <div className="app-container">
-      <Live2DCanvas />
+      <AvatarCanvas />
       <TopBar />
       <ChatPanel onSend={sendText} />
 

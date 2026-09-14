@@ -43,6 +43,15 @@ export default defineConfig({
     // electronRenderer() 已摘除：渲染进程零 Node API（全走 WS/preload），
     // 它的依赖预打包器还会把 pixi 引用的 'url' 外部化成 require() 导致崩溃
   ],
+  // 后端 REST（/api/avatars 等）反代到 Python 后端：渲染进程与后端同源，
+  // 避免跨端口 CORS。缺了这段，/api/* 会被 Vite 的 SPA 兜底成 index.html，
+  // 前端 JSON 解析直接失败（实测："Unexpected token '<'"）。
+  // WebSocket 仍由前端直连 ws://127.0.0.1:8765/ws，不经代理。
+  server: {
+    proxy: {
+      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true },
+    },
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
